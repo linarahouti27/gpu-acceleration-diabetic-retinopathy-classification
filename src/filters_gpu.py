@@ -37,8 +37,8 @@ def median_filter_gpu(t, ksize=5):
 
 
 def green_channel_gpu(t):
-    """TODO(A4.9): the green channel as a (N,1,H,W) tensor (a view, no copy)."""
-    raise NotImplementedError("TODO(A4.9): green_channel_gpu")
+    """The green channel as a (N,1,H,W) tensor (a view, no copy)."""
+    return t[:, 1:2, :, :]
 
 
 def contrast_stretch_gpu(t):
