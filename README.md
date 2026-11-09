@@ -1,96 +1,107 @@
 # GPU Acceleration of a Diabetic Retinopathy Classification Pipeline
 
-Engineering project: GPU Programming and Performance Optimization (2026).
+Engineering project, 2nd year: GPU programming and performance optimization.
+Brief: [`Project_GPU_Acceleration_2026_V1.pdf`](Project_GPU_Acceleration_2026_V1.pdf).
 
-## Project objective
+**Start here: [`ASSIGNMENTS.md`](ASSIGNMENTS.md).** It lists every step in order, with checks and
+questions. You have two weeks, end-to-end run and final report included.
 
-Profile a CPU reference pipeline for 5-class diabetic retinopathy (DR) classification
-(3,000 balanced retinal fundus images), identify its bottlenecks, and redesign/accelerate
-selected stages on the GPU while preserving or improving classification quality.
+**Team members:** TODO(A8.7) replace with your names
 
-Methodology: **profile → hypothesize → optimize → validate → re-profile**.
+## What you will do
 
-## Team members
+The repository holds a working CPU pipeline that grades diabetic retinopathy (five classes) on
+3,000 fundus images. It is correct and slow. Your job is to find out why, then make every stage
+faster: loading, preprocessing, filtering, augmentation, training and evaluation.
 
-- TODO
-- TODO
-- TODO
+The loop you repeat for each change: **profile, hypothesize, optimize, validate, re-profile.**
+You write a prediction in `docs/lab_notebook.md` before each experiment, run it, and explain the
+result. Your report only states numbers that come from files in `results/`.
 
-## Repository structure
+| Days | You | You produce |
+|---|---|---|
+| 1-3 | run and profile the CPU baseline | a measured bottleneck breakdown |
+| 3-6 | redesign loading, write GPU preprocessing and filters | decoded-image cache, batched GPU kernels |
+| 7-10 | build the end-to-end input pipeline and accelerate training | prefetching, mixed precision, a justified model choice |
+| 11-14 | benchmark, profile the GPU, write up | five figures, the tables, the report, the defense |
+
+Code you have to write is marked `TODO(A<n>.<m>)`. `python scripts/progress.py` lists what is
+left, and `python -m pytest tests -v` checks what you have done. Tests that need a GPU are skipped
+on machines without CUDA, so you need a CUDA machine to validate the GPU parts.
+
+## Your first hour
+
+1. Read the brief, then `ASSIGNMENTS.md` up to A2.
+2. Set up the environment and download the dataset (below).
+3. Run `python scripts/progress.py` and `python -m pytest tests -v` to see the starting state.
+4. Start A1 (listed in `docs/checklist.md`): environment, data, hardware table, baseline run.
+
+## Layout
 
 ```
-configs/        Experiment configurations (baseline vs optimized)
-src/            CPU reference (*_cpu.py) and GPU-optimized (*_gpu.py) implementations
-benchmarks/     Profiling and benchmarking scripts
-tests/          Correctness and CPU/GPU equivalence tests
-results/        Timings, metrics and figures
-report/         Final technical report
-environment/    Hardware and software documentation
+ASSIGNMENTS.md   what to do, step by step
+configs/         baseline.yaml (given), optimized.yaml (yours)
+src/             CPU pipeline (given) and GPU modules (yours)
+benchmarks/      profiling and benchmark scripts (CPU parts given, GPU parts yours)
+tests/           automatic checks for your implementations
+scripts/         prepare_fdr26 (dataset), record_env, progress, make_figures (yours)
+docs/            checklist, lab notebook, design proposal, pipeline diagram
+report/          report outline
+environment/     environment.yml, hardware_software.md (Table 1)
+results/         everything the scripts produce (commit the small json/csv/md/png files)
 ```
 
 ## Environment setup
 
-```bash
+TODO(A8.8): keep this section correct for your machine and add the compatibility issues you hit.
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1                     # Linux/macOS: source .venv/bin/activate
+# NVIDIA GPU: install the CUDA build of PyTorch first (plain pip is CPU-only on Windows)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
+python -c "import torch; print(torch.cuda.is_available())"
 ```
 
-See `environment/hardware_software.md` for the exact hardware and software versions used.
+Conda users (Linux): `conda env create -f environment/environment.yml`, activate it, then run the
+`pip install torch torchvision --index-url ...` line above.
 
 ## Dataset
 
-The dataset is not included in this repository. Set its location in `configs/*.yaml`
-(`data.root`). Expected layout:
+FDR26: 3,000 images, 1,918 patients, grades 0-4
+(Zenodo [10.5281/zenodo.20605487](https://doi.org/10.5281/zenodo.20605487), CC-BY-4.0).
 
-```
-<data.root>/
-├── images/            # RGB fundus images
-└── labels.csv         # columns: image_id, patient_id, label (0–4)
+```powershell
+python scripts/prepare_fdr26.py --download
 ```
 
-Labels: 0 = No DR, 1 = Mild, 2 = Moderate, 3 = Severe, 4 = Proliferative DR.
+This creates `data/dr_dataset/<grade 0-4>/<patient>_<index>.<ext>`. The text before the last `_`
+is the patient id; `split_by_patient` keeps each patient in one split. To use another location,
+change `data.root` in the configs.
 
-Splits (train / val / test) are created **before** any model development, grouped by
-patient so that all images from a patient stay in the same split. The test set is never
-used for hyperparameter selection.
+## Commands
 
-## Running the CPU baseline
+| Task | Command |
+|---|---|
+| Progress check | `python scripts/progress.py` |
+| Tests | `python -m pytest tests -v` |
+| CPU baseline | `python src/train_cpu.py` |
+| Evaluate a run | `python src/evaluate.py --config configs/baseline.yaml --run baseline --device cpu` |
+| Any config/device | `python src/train.py --config configs/NAME.yaml --device cuda --run NAME [--monitor]` |
+| Profile the baseline | `python benchmarks/profile_baseline.py` |
+| Stage timings | `python benchmarks/benchmark_stages.py` |
+| End-to-end timings | `python benchmarks/benchmark_end_to_end.py --epochs 2 --repeats 3` |
+| GPU profile | `python benchmarks/profile_gpu.py` |
+| Environment record | `python scripts/record_env.py` |
+| Figures | `python scripts/make_figures.py` |
 
-```bash
-python -m src.train_cpu --config configs/baseline.yaml
-```
+Outputs: `results/<run>/history.json`, `results/<run>/metrics.json`,
+`results/<run>/resources.csv` (with `--monitor`), `checkpoints/<run>/best.pt`.
 
-## Running the optimized implementation
+## Notes
 
-```bash
-python -m src.train_gpu --config configs/optimized.yaml
-```
-
-## Reproducing profiling and benchmarking
-
-```bash
-python -m benchmarks.profile_baseline --config configs/baseline.yaml
-python -m benchmarks.benchmark_stages --config configs/optimized.yaml
-python -m benchmarks.benchmark_end_to_end --config configs/optimized.yaml
-```
-
-Results are written to `results/timing.csv`, `results/metrics.json` and `results/figures/`.
-
-## Reproducing model evaluation
-
-```bash
-python -m src.evaluate --config configs/optimized.yaml --checkpoint <path/to/checkpoint.pt>
-```
-
-## Tests
-
-```bash
-pytest tests/
-```
-
-## Known compatibility issues and hardware requirements
-
-- An NVIDIA GPU with CUDA is required for the `*_gpu.py` modules and GPU benchmarks.
-- CuPy must match the installed CUDA version (e.g. `cupy-cuda12x`).
-- TODO: document any issues encountered.
+- Windows DataLoader workers use `spawn`: transforms must be picklable (no lambdas).
+- Without CUDA the code runs on the CPU and the GPU tests are skipped. A4 to A7 need an NVIDIA
+  GPU (a lab machine or a cloud GPU is fine).
+- This is an educational benchmark, not a diagnostic tool.
