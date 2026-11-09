@@ -1,0 +1,50 @@
+# GPU-optimized configuration (adjust each setting based on profiling evidence)
+experiment: optimized
+seed: 42
+device: cuda
+
+data:
+  root: /path/to/dataset
+  labels_file: labels.csv
+  image_size: 224
+  num_classes: 5
+  split: {train: 0.7, val: 0.15, test: 0.15}
+  group_by_patient: true
+  cache_preprocessed: false
+
+preprocessing:
+  backend: gpu          # cpu | gpu
+  batched: true
+  circular_crop: true
+  clahe: {enabled: true, clip_limit: 2.0, tile_grid_size: 8}
+  normalize: true
+
+filters:
+  backend: gpu
+  gaussian_blur: {enabled: false, kernel_size: 5, sigma: 1.0}
+  median: {enabled: false, kernel_size: 3}
+  green_channel: false
+
+augmentation:
+  backend: gpu
+  horizontal_flip: true
+  vertical_flip: true
+  rotation_degrees: 15
+
+training:
+  model: reference_cnn  # reference_cnn | resnet18 | ...
+  epochs: 10
+  batch_size: 64
+  optimizer: adam
+  learning_rate: 0.001
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+  non_blocking: true
+  mixed_precision: true
+  channels_last: false
+  compile: false
+
+output:
+  checkpoint_dir: checkpoints/optimized
+  results_dir: results

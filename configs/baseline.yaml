@@ -1,0 +1,40 @@
+# CPU reference configuration
+experiment: baseline
+seed: 42
+device: cpu
+
+data:
+  root: /path/to/dataset
+  labels_file: labels.csv
+  image_size: 224
+  num_classes: 5
+  split: {train: 0.7, val: 0.15, test: 0.15}
+  group_by_patient: true
+
+preprocessing:
+  circular_crop: true
+  clahe: {enabled: true, clip_limit: 2.0, tile_grid_size: 8}
+  normalize: true
+
+filters:
+  gaussian_blur: {enabled: false, kernel_size: 5, sigma: 1.0}
+  median: {enabled: false, kernel_size: 3}
+  green_channel: false
+
+augmentation:
+  horizontal_flip: true
+  vertical_flip: true
+  rotation_degrees: 15
+
+training:
+  model: reference_cnn
+  epochs: 10
+  batch_size: 32
+  optimizer: adam
+  learning_rate: 0.001
+  num_workers: 0
+  mixed_precision: false
+
+output:
+  checkpoint_dir: checkpoints/baseline
+  results_dir: results
