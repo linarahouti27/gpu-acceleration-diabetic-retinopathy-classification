@@ -55,5 +55,9 @@ Green channel (no test):
     (e.g. t[:, 0:1], the red one). A test should check the shape (N,1,H,W), that the values
     equal the green channel t[:, 1], and that the result is a view (same memory, no copy).
 
-Still to do:      run `python -m pytest tests/test_cpu_gpu_equivalence.py -v` on a CUDA machine
-                  (Colab or P1's RTX 3050) and paste the result here.
+GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
+                  `python -m pytest tests/test_cpu_gpu_equivalence.py -k "gaussian or median or contrast" -v`
+                  test_gaussian_filter_equivalence   PASSED
+                  test_median_filter_equivalence     PASSED
+                  test_contrast_stretch_equivalence  PASSED
+                  3 passed, 6 deselected in 3.29s
