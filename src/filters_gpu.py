@@ -41,9 +41,10 @@ def green_channel_gpu(t):
 
 
 def contrast_stretch_gpu(t):
-    """TODO(A4.10): per-image contrast stretch using the 1st and 99th percentiles
-    of all pixels of that image (same definition as filters_cpu.contrast_stretch).
-
-    Hint: flatten each image and use torch.quantile along dim=1.
-    """
-    raise NotImplementedError("TODO(A4.10): contrast_stretch_gpu")
+    """Per-image contrast stretch between the 1st and 99th percentiles of all its pixels
+    (same definition as filters_cpu.contrast_stretch)."""
+    N = t.shape[0]
+    t_flat = t.reshape(N, -1)
+    hi = torch.quantile(t_flat, 0.99, dim=1).reshape((N, 1, 1, 1))
+    lo = torch.quantile(t_flat, 0.01, dim=1).reshape((N, 1, 1, 1))
+    return torch.clamp((t - lo) / torch.clamp(hi - lo, min=1e-6), min=0, max=1)
