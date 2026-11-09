@@ -19,14 +19,13 @@ def gaussian_blur_gpu(t, ksize=5, sigma=1.0):
 
 
 def median_filter_gpu(t, ksize=5):
-    """TODO(A4.8): median filter of a batch.
-
-    Hint: pad with mode="replicate" (what cv2.medianBlur does), extract all
-    ksize*ksize neighbourhoods with F.unfold, take the median along that axis.
-    F.unfold on (N,3,H,W) returns (N, 3*k*k, L): reshape it to (N,3,k*k,H,W) first.
-    Note the memory cost: ksize^2 times the input size. Report it.
-    """
-    raise NotImplementedError("TODO(A4.8): median_filter_gpu")
+    """Median filter of a batch (N,C,H,W): replicate padding (as cv2.medianBlur), then
+    F.unfold gathers every k*k neighbourhood. Memory cost: k*k times the input size."""
+    N, C, H, W = t.shape
+    k = ksize if ksize % 2 == 1 else ksize + 1
+    t_pad = F.pad(t, (k//2, k//2, k//2, k//2), mode="replicate")
+    columns = F.unfold(t_pad, kernel_size=k).reshape((N, C, k*k, H*W))
+    return torch.median(columns, dim=2).values.reshape((N, C, H, W))
 
 
 # TODO(A4.11): pick ONE of the filters above and implement a second GPU version with a
