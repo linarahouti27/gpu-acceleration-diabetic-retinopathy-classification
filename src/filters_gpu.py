@@ -8,15 +8,14 @@ import torch.nn.functional as F
 
 
 def gaussian_blur_gpu(t, ksize=5, sigma=1.0):
-    """TODO(A4.7): Gaussian blur of a batch.
-
-    Hint: build the 1D kernel, take the outer product for a 2D kernel, and apply it
-    to all channels with F.conv2d(..., groups=3) after reflect padding
-    (OpenCV's default border is reflect-101, which equals torch "reflect").
-    Even ksize must be bumped to the next odd value like filters_cpu.gaussian_blur.
-    Stretch goal: use two separable 1D passes and measure whether they are faster.
-    """
-    raise NotImplementedError("TODO(A4.7): gaussian_blur_gpu")
+    """Gaussian blur of a batch (N,3,H,W): one 2D kernel applied per channel."""
+    k = ksize if ksize % 2 == 1 else ksize + 1
+    x = torch.arange(k, device=t.device, dtype=t.dtype) - k // 2
+    g = torch.exp(-x ** 2 / (2 * sigma ** 2))
+    g /= g.sum()
+    t_pad = F.pad(t, (k//2, k//2, k//2, k//2), mode='reflect')
+    g_2d = torch.outer(g, g)
+    return F.conv2d(t_pad, torch.stack((g_2d, g_2d, g_2d)).unsqueeze(1), groups=3)
 
 
 def median_filter_gpu(t, ksize=5):
