@@ -61,3 +61,16 @@ GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
                   test_median_filter_equivalence     PASSED
                   test_contrast_stretch_equivalence  PASSED
                   3 passed, 6 deselected in 3.29s
+
+### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina)   date: 2026-11-10
+Question:             At which batch size (1, 8, 32, 64, 128) does the GPU median filter become
+                      faster per image than the CPU (OpenCV) one, if ever?
+Prediction:           At batch size 1 the GPU is slower than the CPU, because the fixed kernel
+                      launch overhead dominates. As the batch grows, the GPU time per image drops
+                      (the overhead is shared by more images) and goes below the CPU time at
+                      about batch size 64. The CPU time per image stays roughly constant.
+Command:              (to be filled after the run)
+Result:               (to be filled after the run)
+Prediction vs result: (to be filled after the run)
+Explanation:          (to be filled after the run)
+Decision:             (to be filled after the run)
