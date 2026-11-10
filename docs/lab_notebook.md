@@ -97,3 +97,15 @@ Decision:             Do not use this GPU median filter as is (it is not used in
                       A4.11): each thread reads its 25 neighbours directly and sorts them in
                       registers, which removes the 25x copy. Tuning blocks / threads per block is a
                       secondary improvement. Re-run on P1's RTX 3050 for the official numbers.
+
+### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina)   date: 2026-11-10
+Question:             How long does copying one batch of images from CPU memory to the GPU take
+                      as uint8 vs as float32? (Second part, how much of the GPU preprocessing
+                      time is the copy, needs P3's preprocess_batch_gpu.)
+Prediction:           uint8 should be about 4x faster to copy, because it has 4x fewer bytes to
+                      move (1 byte per value instead of 4).
+Command:              (to be filled after the run)
+Result:               (to be filled after the run)
+Prediction vs result: (to be filled after the run)
+Explanation:          (to be filled after the run)
+Decision:             (to be filled after the run)
