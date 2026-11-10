@@ -130,3 +130,43 @@ Decision:             Copy the batches as uint8 from pinned memory and convert t
                       0.25 s per epoch; compare with the epoch time from P1's profiling (Amdahl).
 Still to do:          second part of A4.14, the share of the copy in the GPU preprocessing time,
                       needs P3's preprocess_batch_gpu. Re-run on P1's RTX 3050 for official numbers.
+
+### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina)   date: 2026-11-10
+Motivation:           A4.13 showed the PyTorch median (pad + F.unfold + torch.median) is slower
+                      than OpenCV at every batch size, because it runs 3 kernels and writes a 25x
+                      intermediate tensor to GPU memory.
+Implementation:       src/filters_numba.py (wrapper: filters_gpu.median_filter_numba). One thread
+                      per output pixel, 2D blocks of 16x16 threads, one grid layer (blockIdx.z) per
+                      image-channel slice. Each thread reads its 5x5 neighbours directly (coordinates
+                      clamped to the image = replicate padding), sorts them in a private
+                      cuda.local.array with an insertion sort and writes the middle value.
+                      One kernel launch, no padding tensor, no 25x copy. Window fixed at 5x5.
+Correctness:          tests/test_cpu_gpu_equivalence.py::test_median_filter_numba_equivalence
+                      PASSED on Colab T4 (same rule as the PyTorch median test). Also checked in
+                      Numba's CUDA simulator on 20x20 and 23x17 images (0% of pixels off by more
+                      than 1 gray level; 23x17 exercises the out-of-image threads).
+Prediction:           No prediction was written before the run. Stated after the run: I expected
+                      it to be only slightly faster than the CPU, and only at larger batch sizes.
+Command:              python -m pytest tests/test_cpu_gpu_equivalence.py -k numba -v
+                      python benchmarks/sweep_median.py
+Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
+                        batch    CPU (OpenCV)   PyTorch (A4.8)   Numba (A4.11)
+                          1         0.76            4.80            1.33
+                          8         0.80            3.79            0.51
+                         32         0.84            2.42            0.56
+                         64         0.84            2.43            0.56
+                        128         1.00            2.44            0.55
+Prediction vs result: Better than expected. The Numba kernel beats OpenCV from batch size 8 on
+                      (1.5-1.8x faster) and is about 4.4x faster than the PyTorch version from
+                      batch 32 on. At batch size 1 the CPU still wins (launch overhead).
+Explanation:          Fusion avoids the 25x memory copy: each thread reads its neighbours straight
+                      into its private array instead of F.unfold writing a 25x larger tensor to GPU
+                      memory and torch.median reading it back, and there is one kernel launch
+                      instead of three. Same GPU and same idea (sort 25 values per pixel), so the
+                      gain comes from less memory traffic. The GPU is saturated from batch 8 on
+                      (flat curve), earlier than the PyTorch version (batch 32), since there is less
+                      work per image. It wins over OpenCV despite using a simple insertion sort.
+Decision:             The fused kernel is the GPU median filter worth keeping. The median filter is
+                      not used in training, so this does not speed up the pipeline itself; it shows
+                      why kernel fusion matters. Possible next step: a faster sort (e.g. only
+                      partially sorting up to the 13th value). Re-run on P1's RTX 3050.
