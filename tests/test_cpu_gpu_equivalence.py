@@ -80,6 +80,20 @@ def test_median_filter_equivalence():
 
 
 @cuda
+def test_median_filter_numba_equivalence():
+    """A4.11: the custom Numba kernel must match the CPU reference like median_filter_gpu."""
+    pytest.importorskip("numba.cuda")
+    from src import filters_cpu, filters_gpu
+    img = sample_batch(1)[0]
+    cpu = filters_cpu.median_filter(img, ksize=5)
+    gpu = filters_gpu.median_filter_numba(
+        torch.from_numpy(img).permute(2, 0, 1)[None].cuda()
+    )[0].permute(1, 2, 0).cpu().numpy()
+    frac_diff = (np.abs(cpu - gpu) > (1.0 / 255)).mean()
+    assert frac_diff < 0.02
+
+
+@cuda
 def test_clahe_batched_matches_single_image():
     """Batched CLAHE must give each image the same result as processing it alone."""
     from src import preprocess_gpu

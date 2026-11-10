@@ -28,10 +28,12 @@ def median_filter_gpu(t, ksize=5):
     return torch.median(columns, dim=2).values.reshape((N, C, H, W))
 
 
-# TODO(A4.11): pick ONE of the filters above and implement a second GPU version with a
-# different tool (CuPy cupyx.scipy.ndimage, a Numba CUDA kernel, or separable convolutions).
-# Put it in this file under a clear name and compare both versions against the CPU
-# reference in speed and in maximum absolute difference. Which would you ship, and why?
+def median_filter_numba(t):
+    """A4.11: second GPU version of the median filter (5x5), a fused custom Numba CUDA kernel.
+    See src/filters_numba.py. Imported here only when called, so the other filters work
+    on machines without Numba."""
+    from src.filters_numba import median_filter_numba as _median_numba
+    return _median_numba(t)
 
 
 def green_channel_gpu(t):

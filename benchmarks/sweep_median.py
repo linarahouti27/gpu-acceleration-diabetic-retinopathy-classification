@@ -11,6 +11,10 @@ import numpy as np
 import pandas as pd
 import torch
 from src import filters_cpu, filters_gpu
+try:                                     # A4.11: optional custom Numba kernel, if Numba is installed
+    from src.filters_numba import median_filter_numba
+except ImportError:
+    median_filter_numba = None
 
 
 def time_it(fn, cuda, repeats=5, warmup=2):
@@ -44,12 +48,17 @@ def main():
 
         cpu_mean, cpu_std = time_it(lambda: [filters_cpu.median_filter(i) for i in imgs], cuda=False)
         gpu_mean, gpu_std = time_it(lambda: filters_gpu.median_filter_gpu(t), cuda=True)
+        row_numba = {}
+        if median_filter_numba is not None:
+            nb_mean, nb_std = time_it(lambda: median_filter_numba(t), cuda=True)
+            row_numba = {"numba_ms_per_image": (nb_mean / n) * 10 ** 3,
+                         "numba_std_ms_per_image": (nb_std / n) * 10 ** 3}
 
         rows.append({"batch_size": n,
                      "cpu_ms_per_image": (cpu_mean / n) * 10 ** 3,
                      "gpu_ms_per_image": (gpu_mean / n) * 10 ** 3,
                      "cpu_std_ms_per_image": (cpu_std / n) * 10 ** 3,
-                     "gpu_std_ms_per_image": (gpu_std / n) * 10 ** 3})
+                     "gpu_std_ms_per_image": (gpu_std / n) * 10 ** 3, **row_numba})
         print(rows[-1], flush=True)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
