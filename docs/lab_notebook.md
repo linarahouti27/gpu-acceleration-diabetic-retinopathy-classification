@@ -69,8 +69,31 @@ Prediction:           At batch size 1 the GPU is slower than the CPU, because th
                       launch overhead dominates. As the batch grows, the GPU time per image drops
                       (the overhead is shared by more images) and goes below the CPU time at
                       about batch size 64. The CPU time per image stays roughly constant.
-Command:              (to be filled after the run)
-Result:               (to be filled after the run)
-Prediction vs result: (to be filled after the run)
-Explanation:          (to be filled after the run)
-Decision:             (to be filled after the run)
+Command:              python benchmarks/sweep_median.py   (default: batch sizes 1 8 32 64 128,
+                      5 repeats, 2 warm-up runs, CUDA synchronized around every timed run;
+                      the batch is already on the GPU, so the host-to-device copy is excluded)
+Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
+                        batch    CPU (OpenCV)   GPU (torch)
+                          1         0.73           3.58
+                          8         0.82           2.76
+                         32         0.84           2.44
+                         64         1.11           2.44
+                        128         1.10           2.45
+                      Colab's CPU is shared, so the CPU times are noisy.
+Prediction vs result: I predicted the GPU would overtake the CPU at batch size 64, but the CPU
+                      won at every batch size (about 2x faster at 128). The first part of the
+                      prediction was right: the GPU time per image drops from 3.58 to 2.44 ms as
+                      the launch overhead is shared by more images. But it becomes flat from
+                      batch 32 on: the GPU is then fully busy and 2.44 ms is the cost of the work
+                      itself, so bigger batches cannot help.
+Explanation:          The two versions do not do the same amount of work. OpenCV's medianBlur is a
+                      specialized algorithm tuned for 8-bit images that avoids sorting most values.
+                      My GPU version uses general operations: F.unfold copies each pixel's 25
+                      neighbours into memory (25x the input size, about 1.9 GB for 128 images),
+                      then torch.median sorts those 25 values once for every pixel. The extra memory
+                      traffic and generic sorting cost more than the GPU's parallelism gains.
+Decision:             Do not use this GPU median filter as is (it is not used in training anyway).
+                      To make it faster, fuse the steps into one custom kernel (e.g. Numba CUDA,
+                      A4.11): each thread reads its 25 neighbours directly and sorts them in
+                      registers, which removes the 25x copy. Tuning blocks / threads per block is a
+                      secondary improvement. Re-run on P1's RTX 3050 for the official numbers.
