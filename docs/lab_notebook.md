@@ -104,8 +104,29 @@ Question:             How long does copying one batch of images from CPU memory 
                       time is the copy, needs P3's preprocess_batch_gpu.)
 Prediction:           uint8 should be about 4x faster to copy, because it has 4x fewer bytes to
                       move (1 byte per value instead of 4).
-Command:              (to be filled after the run)
-Result:               (to be filled after the run)
-Prediction vs result: (to be filled after the run)
-Explanation:          (to be filled after the run)
-Decision:             (to be filled after the run)
+Command:              python benchmarks/h2d_copy.py   (batch sizes 1 8 32 128, 10 repeats, 2 warm-up
+                      runs, CUDA synchronized; pinning is done before timing, only the copy is timed)
+Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). Copy time in ms:
+                        batch | uint8 normal  float32 normal  ratio | uint8 pinned  float32 pinned  ratio
+                          1   |    0.083          0.214        2.6x |    0.041          0.079       1.9x
+                          8   |    0.381          1.102        2.9x |    0.133          0.443       3.3x
+                         32   |    1.185          4.090        3.5x |    0.427          1.629       3.8x
+                        128   |    4.145         16.959        4.1x |    1.632          6.328       3.9x
+                      Bandwidth for large batches: about 4.6 GB/s (normal) vs about 12 GB/s (pinned).
+Prediction vs result: uint8 is faster than float32 at every batch size. The predicted 4x holds for
+                      large batches (3.9-4.1x at 128), but not for small ones (1.9-2.6x at batch 1):
+                      every copy has a fixed start-up cost that dominates when the batch is tiny.
+Explanation:          The copy time depends on the number of bytes, not on the type: uint8 at batch
+                      128 and float32 at batch 32 are both 19.27 MB and take the same time (4.15 vs
+                      4.09 ms normal, 1.63 vs 1.63 ms pinned). Pinned memory is about 2.6x faster for
+                      both types because the driver does not need an extra copy into a fixed staging
+                      area first; at about 12 GB/s it is close to the PCIe limit of the T4.
+Decision:             Copy the batches as uint8 from pinned memory and convert to float on the GPU
+                      (P3's design): about 10x faster than copying float32 from normal memory
+                      (batch 32: 4.09 -> 0.43 ms). The pinned uint8 batch is small (19 MB at batch
+                      128), so pinning is cheap, especially if the pinned buffer is reused instead of
+                      allocated for every batch (PyTorch's pin_memory already caches pinned blocks).
+                      Keep it in perspective: at batch 32 this saves about 3.7 ms per batch, about
+                      0.25 s per epoch; compare with the epoch time from P1's profiling (Amdahl).
+Still to do:          second part of A4.14, the share of the copy in the GPU preprocessing time,
+                      needs P3's preprocess_batch_gpu. Re-run on P1's RTX 3050 for official numbers.
