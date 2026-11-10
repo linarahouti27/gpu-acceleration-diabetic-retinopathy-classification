@@ -48,7 +48,8 @@ def main():
         rows.append({"batch_size": n,
                      "cpu_ms_per_image": (cpu_mean / n) * 10 ** 3,
                      "gpu_ms_per_image": (gpu_mean / n) * 10 ** 3,
-                     "cpu_std_ms": cpu_std * 1e3, "gpu_std_ms": gpu_std * 1e3})
+                     "cpu_std_ms_per_image": (cpu_std / n) * 10 ** 3,
+                     "gpu_std_ms_per_image": (gpu_std / n) * 10 ** 3})
         print(rows[-1], flush=True)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
