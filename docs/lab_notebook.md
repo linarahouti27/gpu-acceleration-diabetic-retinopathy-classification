@@ -170,3 +170,33 @@ Decision:             The fused kernel is the GPU median filter worth keeping. T
                       not used in training, so this does not speed up the pipeline itself; it shows
                       why kernel fusion matters. Possible next step: a faster sort (e.g. only
                       partially sorting up to the 13th value). Re-run on P1's RTX 3050.
+
+### A1.4 Patient-safe split check          date: 2026-11-10
+Config / commit:      configs/baseline.yaml @ dd9e6c7
+
+Question:             Is the split balanced per class, is any patient in two splits,
+                      and why must the split be done by patient?
+Prediction:           Splits roughly 70/15/15 with class proportions close to the full
+                      dataset, and no patient shared between splits, because
+                      split_by_patient assigns whole patients to one split.
+                      
+       
+
+
+Command:              %cd /content/drive/MyDrive/gpua import yaml from src.data_loader import        
+find_images, split_by_patient, patient_id cfg = yaml.safe_load(open("configs/baseline.yaml")) s = split_by_patient(find_images(cfg["data"]["root"]), cfg["data"]["train_frac"], cfg["data"]["val_frac"], cfg["seed"]) for k, v in s.items(): print(k, len(v), {c: sum(l == c for _, l in v) for c in range(5)}, "patients:", len({patient_id(p) for p, _ in v}))
+
+
+Result:               train 2116 {0:343, 1:489, 2:418, 3:453, 4:413} patients 1342
+                      val    425 {0:83,  1:104, 2:76,  3:78,  4:84}  patients 287
+                      test   458 {0:78,  1:108, 2:89,  3:101, 4:82}  patients 289
+                      Total images 2999 , total patients 1918.
+                      Pairwise patient intersections: train&val=0, train&test=0,
+                      val&test=0   Union of patients = 1918 
+                      Images in splits = 2999, images from find_images = ⟦len(items)
+                     Share of images: train 70.6%, val 14.2%, test 15.3%
+                      Single deterministic run (fixed seed), so no mean +/- std.
+Prediction vs result: Proportions matched the prediction (about 70/15/15). Classes are not equal: totals per class are {0: 504, 1: 701, ...}, class 1 is the largest. One image fewer than the 3000 in the brief..
+                      
+Explanation:          patient_id is the filename text before the last "_". split_by_patient groups images by patient id and assigns each whole patient to one split. The patient union equals 1918 and all pairwise intersections are empty, so there is no leakage. Per-class fractions are not exact (e.g. class 0 has 68% in train) because whole patients move together. Patient-level splitting is needed because 3000 images come from 1918 patients: images of one patient are near-duplicates, so an image-level split would let the model recognise the patient instead of the disease and inflate val/test scores. 2999 vs 3000: 
+Decision:             Split is valid and patient-safe; keep it unchanged. Proceed to A2.

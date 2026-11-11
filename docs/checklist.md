@@ -9,7 +9,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 ## A1. Baseline execution and verification
 
 - TODO(A1.1) Create the environment, download FDR26, count the images per class folder.
-- TODO(A1.4) Run the split check from `ASSIGNMENTS.md`, paste the output in the notebook, answer its questions.
+-  Run the split check from `ASSIGNMENTS.md`, paste the output in the notebook, answer its questions.
 - TODO(A1.6) Read the six source files and write which function implements each of modules A to E.
 - TODO(A1.7) Smoke-run the baseline for one epoch, then run it fully once. Note the validation accuracy.
 - TODO(A1.8) Separate one-time costs from repeated costs in `results/baseline/history.json`.
