@@ -36,16 +36,23 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
         `device`. When it is given, use it instead of x.to(device).
     TODO(A5.4): make host-device copies asynchronous: x.to(device, non_blocking=True).
         Then explain in the report why this only helps with pinned memory.
-    TODO(A2.2): the loss and accuracy are accumulated on the device so that the host
-        waits once per epoch. Find the line in the loop that would force a sync on every
-        batch if it were written differently, and explain it in a comment.
     """
     train = optimizer is not None
     model.train() if train else model.eval()
     loss_sum = torch.zeros((), device=device)
     correct = torch.zeros((), device=device, dtype=torch.long)
     total = 0
+    total = 0
     with torch.enable_grad() if train else torch.no_grad():
+
+        # loss_sum and correct are accumulated as GPU tensors throughout the loop.
+        # The current code retrieves their values using .item() only after the loop.
+        # Calling loss.item() inside the loop would force a GPU synchronization per batch.
+        # This would make the CPU wait and reduce overlap with the next batch's data transfer.
+        # loss_sum and correct are accumulated as GPU tensors throughout the loop.
+        # Their values are retrieved using .item() only after the loop.
+        # Calling loss.item() inside the loop would force GPU synchronization per batch.
+        # This would make the CPU wait and reduce overlap with the next batch's data transfer.
         for x, y in loader:
             y = y.to(device)
             x = x.to(device)
