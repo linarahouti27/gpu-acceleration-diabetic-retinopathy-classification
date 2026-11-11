@@ -35,6 +35,24 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 - **Conclusion du profilage (Moyenne sur 7 itérations)**
 
+
+**Moyenne des 7 exécutions du profilage**
+
+**Temps total moyen :** ~0.002238 s (2 238 337 ns)
+
+| Line # | Hits | Time (ns) | Per Hit (ns) | % Time | Line Contents |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 23 | | | | | `def apply_clahe(img, clip=2.0, grid=8):` |
+| 24 | | | | | `"""CLAHE on the L channel of LAB. Input RGB float [0,1], same range out."""` |
+| 25 | 1 | 207,140.6 | 207,140.6 | 9.3% | `u8 = (img * 255).astype(np.uint8)` |
+| 26 | 1 | 480,974.7 | 480,974.7 | 21.5% | `lab = cv2.cvtColor(u8, cv2.COLOR_RGB2LAB)` |
+| 27 | 1 | 100,700.0 | 100,700.0 | 4.5% | `l, a, b = cv2.split(lab)` |
+| 28 | 1 | 568,260.4 | 568,260.4 | 25.4% | `cl = cv2.createCLAHE(clipLimit=clip, tileGridSize=(grid, grid)).apply(l)` |
+| 29 | 1 | 746,284.0 | 746,284.0 | 33.3% | `out = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)` |
+| 30 | 1 | 149,977.3 | 149,977.3 | 6.7% | `return out.astype(np.float32) / 255.0` |
+
+
+
 Le temps total moyen d'exécution est de ~2.2 ms par image. L'analyse de la répartition du temps montre que l'algorithme d'égalisation d'histogramme n'est pas le véritable goulot d'étranglement :
 
 * **Le coût des conversions (L'overhead) :** Les étapes de conversion d'espace colorimétrique consomment la majorité du temps de calcul. La conversion RGB vers LAB (ligne 26) prend 21,5 % du temps, et le retour de LAB vers RGB (ligne 29) représente l'opération la plus lourde avec 33,3 % du temps.
