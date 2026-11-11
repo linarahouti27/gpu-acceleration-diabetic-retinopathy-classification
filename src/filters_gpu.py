@@ -8,43 +8,44 @@ import torch.nn.functional as F
 
 
 def gaussian_blur_gpu(t, ksize=5, sigma=1.0):
-    """TODO(A4.7): Gaussian blur of a batch.
-
-    Hint: build the 1D kernel, take the outer product for a 2D kernel, and apply it
-    to all channels with F.conv2d(..., groups=3) after reflect padding
-    (OpenCV's default border is reflect-101, which equals torch "reflect").
-    Even ksize must be bumped to the next odd value like filters_cpu.gaussian_blur.
-    Stretch goal: use two separable 1D passes and measure whether they are faster.
-    """
-    raise NotImplementedError("TODO(A4.7): gaussian_blur_gpu")
+    """Gaussian blur of a batch (N,3,H,W): one 2D kernel applied per channel."""
+    k = ksize if ksize % 2 == 1 else ksize + 1
+    x = torch.arange(k, device=t.device, dtype=t.dtype) - k // 2
+    g = torch.exp(-x ** 2 / (2 * sigma ** 2))
+    g /= g.sum()
+    t_pad = F.pad(t, (k//2, k//2, k//2, k//2), mode='reflect')
+    g_2d = torch.outer(g, g)
+    return F.conv2d(t_pad, torch.stack((g_2d, g_2d, g_2d)).unsqueeze(1), groups=3)
 
 
 def median_filter_gpu(t, ksize=5):
-    """TODO(A4.8): median filter of a batch.
+    """Median filter of a batch (N,C,H,W): replicate padding (as cv2.medianBlur), then
+    F.unfold gathers every k*k neighbourhood. Memory cost: k*k times the input size."""
+    N, C, H, W = t.shape
+    k = ksize if ksize % 2 == 1 else ksize + 1
+    t_pad = F.pad(t, (k//2, k//2, k//2, k//2), mode="replicate")
+    columns = F.unfold(t_pad, kernel_size=k).reshape((N, C, k*k, H*W))
+    return torch.median(columns, dim=2).values.reshape((N, C, H, W))
 
-    Hint: pad with mode="replicate" (what cv2.medianBlur does), extract all
-    ksize*ksize neighbourhoods with F.unfold, take the median along that axis.
-    F.unfold on (N,3,H,W) returns (N, 3*k*k, L): reshape it to (N,3,k*k,H,W) first.
-    Note the memory cost: ksize^2 times the input size. Report it.
-    """
-    raise NotImplementedError("TODO(A4.8): median_filter_gpu")
 
-
-# TODO(A4.11): pick ONE of the filters above and implement a second GPU version with a
-# different tool (CuPy cupyx.scipy.ndimage, a Numba CUDA kernel, or separable convolutions).
-# Put it in this file under a clear name and compare both versions against the CPU
-# reference in speed and in maximum absolute difference. Which would you ship, and why?
+def median_filter_numba(t):
+    """A4.11: second GPU version of the median filter (5x5), a fused custom Numba CUDA kernel.
+    See src/filters_numba.py. Imported here only when called, so the other filters work
+    on machines without Numba."""
+    from src.filters_numba import median_filter_numba as _median_numba
+    return _median_numba(t)
 
 
 def green_channel_gpu(t):
-    """TODO(A4.9): the green channel as a (N,1,H,W) tensor (a view, no copy)."""
-    raise NotImplementedError("TODO(A4.9): green_channel_gpu")
+    """The green channel as a (N,1,H,W) tensor (a view, no copy)."""
+    return t[:, 1:2, :, :]
 
 
 def contrast_stretch_gpu(t):
-    """TODO(A4.10): per-image contrast stretch using the 1st and 99th percentiles
-    of all pixels of that image (same definition as filters_cpu.contrast_stretch).
-
-    Hint: flatten each image and use torch.quantile along dim=1.
-    """
-    raise NotImplementedError("TODO(A4.10): contrast_stretch_gpu")
+    """Per-image contrast stretch between the 1st and 99th percentiles of all its pixels
+    (same definition as filters_cpu.contrast_stretch)."""
+    N = t.shape[0]
+    t_flat = t.reshape(N, -1)
+    hi = torch.quantile(t_flat, 0.99, dim=1).reshape((N, 1, 1, 1))
+    lo = torch.quantile(t_flat, 0.01, dim=1).reshape((N, 1, 1, 1))
+    return torch.clamp((t - lo) / torch.clamp(hi - lo, min=1e-6), min=0, max=1)
