@@ -158,6 +158,41 @@ GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
                   test_contrast_stretch_equivalence  PASSED
                   3 passed, 6 deselected in 3.29s
 
+### A4.13 CLAHE: GPU vs CPU time per image across batch sizes (P3: Inès)   date: 2026-11-11
+Question:             At which batch size (1, 8, 32, 64, 128) does the GPU CLAHE become faster
+                      per image than the CPU (OpenCV) implementation, if ever?
+Prediction:           As the batch size increases, the GPU will become significantly faster per
+                      image and much more advantageous to use than the CPU. At batch size 1,
+                      fixed CUDA kernel launch overhead dominates on a single 224x224 image, so
+                      the GPU will perform similarly to the CPU (~2.2 ms/image from A2.7). As the
+                      batch size grows (8, 32, 64, 128), launch overhead is amortized across the
+                      batch and parallel tile histogram computation makes the GPU overtake the CPU.
+Command:              python benchmarks/sweep_clahe.py   (default: batch sizes 1 8 32 64 128,
+                      5 repeats, 2 warm-up runs, CUDA synchronized around every timed run;
+                      the batch is already on the GPU, so the host-to-device copy is excluded)
+Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
+                        batch    CPU (OpenCV) ± std   GPU (torch) ± std   Speedup
+                          1         2.26 ± 0.10          2.24 ± 0.11       1.01x
+                          8         2.11 ± 0.15          0.33 ± 0.08       6.36x
+                         32         2.28 ± 0.03          0.17 ± 0.00      13.21x
+                         64         2.52 ± 0.28          0.16 ± 0.00      15.37x
+                        128         2.09 ± 0.06          0.16 ± 0.00      13.12x
+Prediction vs result: Matches the prediction. At batch size 1, GPU (2.24 ms) and CPU (2.26 ms)
+                      break even (1.01x). By batch size 8, the GPU is already 6.36x faster per
+                      image (0.33 ms vs 2.11 ms). From batch size 32 onwards, the GPU reaches a
+                      steady plateau of ~0.16 ms/image, achieving a 13x-15x speedup over OpenCV.
+Explanation:          The CPU processes images sequentially in a Python loop, so its time per
+                      image stays constant (~2.1-2.5 ms). On the GPU, `clahe_gpu` launches a
+                      sequence of small kernels (sRGB-to-L* conversion, tile reshaping, one
+                      batched `scatter_add_` over all `N * 64` tiles, `cumsum` CDF, and bilinear
+                      LUT interpolation). At batch size 1 (only 64 tiles), kernel launch latency
+                      dominates. As `N` increases, all `N * 64` histograms are accumulated in a
+                      single `scatter_add_` call without blowing up memory (unlike `F.unfold` in
+                      the median filter), saturating the GPU around batch size 32-64.
+Decision:             Keep `clahe_gpu` in `preprocess_batch_gpu` for batched training and
+                      inference (batch size >= 8, typically 32 or 64). P1 will run
+                      `benchmarks/sweep_clahe.py` on the RTX 3050 for the official report numbers.
+
 ### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina)   date: 2026-11-10
 Question:             At which batch size (1, 8, 32, 64, 128) does the GPU median filter become
                       faster per image than the CPU (OpenCV) one, if ever?
