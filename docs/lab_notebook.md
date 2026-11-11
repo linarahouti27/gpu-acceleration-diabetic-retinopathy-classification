@@ -25,44 +25,49 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 (add yours below)
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
-Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
-                  tests are covered by P3). 1 gray level = 1/255 ≈ 0.004.
-Measured so far:  checked with a NumPy re-implementation of each GPU function against
-                  `src/filters_cpu.py` (no CUDA machine available yet).
-
-Gaussian blur (every pixel within 0.02):
-    Too loose. 0.02 is about 5 gray levels, while my blur differs from OpenCV by only 3e-7.
-    A slightly wrong blur (wrong sigma, wrong border mode) could still pass. Some margin is
-    needed because the GPU computes convolutions in lower precision (TF32), but about
-    1 gray level (0.004) would be enough.
-
-Median filter (at most 2% of pixels may differ by more than 1 gray level):
-    The 1-gray-level allowance is necessary: the CPU version converts to uint8, which rounds
-    every value down to a whole gray level, so it can never be more than 1 gray level away
-    from an exact float result. But 2% (about 1,000 pixels of a 224x224 image) is too generous:
-    my version had 0% of pixels beyond 1 gray level. A tiny margin for floating-point rounding
-    is fair (e.g. 0.1%). Also, the test image is black at the borders, so a wrong padding
-    mode (reflect instead of replicate) would still pass.
-
-Contrast stretch (every pixel within 0.001):
-    About right. 0.001 is a quarter of a gray level, so invisible, and my version differs by
-    only 6e-8 because CPU and GPU compute the percentiles the same way (linear interpolation).
-    It could be tightened slightly (e.g. 1e-4), but not much more: a tolerance too close to
-    zero could fail a correct GPU version just because of floating-point rounding differences.
-
-Green channel (no test):
-    This is a problem: nothing would warn us if the function returned the wrong channel
-    (e.g. t[:, 0:1], the red one). A test should check the shape (N,1,H,W), that the values
-    equal the green channel t[:, 1], and that the result is a view (same memory, no copy).
-
-GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
-                  `python -m pytest tests/test_cpu_gpu_equivalence.py -k "gaussian or median or contrast" -v`
-                  test_gaussian_filter_equivalence   PASSED
-                  test_median_filter_equivalence     PASSED
-                  test_contrast_stretch_equivalence  PASSED
-                  3 passed, 6 deselected in 3.29s
+Config / commit:      none (tests only); filters at commit 30071bd (A4.7-A4.10)
+Question:             Are the tolerances of the three filter tests in
+                      tests/test_cpu_gpu_equivalence.py appropriate? (The preprocessing tests are
+                      covered by P3.) 1 gray level = 1/255 = about 0.004.
+Prediction:           n/a: a review of the test specification, not a timed experiment. No prediction
+                      was written before reading the tests.
+Command:              python -m pytest tests/test_cpu_gpu_equivalence.py -k "gaussian or median or contrast" -v
+Result:               GPU run on Colab, Tesla T4, Python 3.13.16, pytest 8.4.2:
+                        test_gaussian_filter_equivalence   PASSED
+                        test_median_filter_equivalence     PASSED
+                        test_contrast_stretch_equivalence  PASSED
+                        3 passed, 6 deselected in 3.29s
+                      Before that, each GPU function was checked with a NumPy re-implementation
+                      against src/filters_cpu.py: largest differences 3e-7 (Gaussian), 1 gray level
+                      with 0% of pixels beyond it (median), 6e-8 (contrast stretch).
+Prediction vs result: n/a (no prediction).
+Explanation:          Gaussian blur (every pixel within 0.02): too loose. 0.02 is about 5 gray levels,
+                      while my blur differs from OpenCV by only 3e-7. A slightly wrong blur (wrong
+                      sigma, wrong border mode) could still pass. Some margin is needed because the
+                      GPU computes convolutions in lower precision (TF32), but about 1 gray level
+                      (0.004) would be enough.
+                      Median filter (at most 2% of pixels may differ by more than 1 gray level): the
+                      1-gray-level allowance is necessary, because the CPU version converts to uint8,
+                      which rounds every value down to a whole gray level, so it can never be more
+                      than 1 gray level away from an exact float result. But 2% (about 1,000 pixels
+                      of a 224x224 image) is too generous: my version had 0% of pixels beyond 1 gray
+                      level. Also, the test image is black at the borders, so a wrong padding mode
+                      (reflect instead of replicate) would still pass.
+                      Contrast stretch (every pixel within 0.001): about right. 0.001 is a quarter of
+                      a gray level, so invisible, and CPU and GPU compute the percentiles the same way
+                      (linear interpolation). It could be tightened slightly (e.g. 1e-4), but not much
+                      more: a tolerance too close to zero could fail a correct GPU version just
+                      because of floating-point rounding differences.
+                      Green channel: no test. Nothing would warn us if the function returned the wrong
+                      channel (e.g. t[:, 0:1], the red one).
+Decision:             Keep the tests (all pass), but propose: Gaussian tolerance about 1 gray level;
+                      median at most about 0.1% of pixels beyond 1 gray level, with a test image that
+                      is not black at the borders; a green-channel test checking the shape (N,1,H,W),
+                      the values (equal to t[:, 1]) and that the result is a view (same memory).
 
 ### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina)   date: 2026-11-10
+Config / commit:      none (script defaults); benchmarks/sweep_median.py at commit 9ce6840
+                      (that version reported the std per batch; per image since 1954c73)
 Question:             At which batch size (1, 8, 32, 64, 128) does the GPU median filter become
                       faster per image than the CPU (OpenCV) one, if ever?
 Prediction:           At batch size 1 the GPU is slower than the CPU, because the fixed kernel
@@ -99,6 +104,7 @@ Decision:             Do not use this GPU median filter as is (it is not used in
                       secondary improvement. Re-run on P1's RTX 3050 for the official numbers.
 
 ### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina)   date: 2026-11-10
+Config / commit:      none (script defaults); benchmarks/h2d_copy.py at commit a59a759
 Question:             How long does copying one batch of images from CPU memory to the GPU take
                       as uint8 vs as float32? (Second part, how much of the GPU preprocessing
                       time is the copy, needs P3's preprocess_batch_gpu.)
@@ -128,28 +134,23 @@ Decision:             Copy the batches as uint8 from pinned memory and convert t
                       allocated for every batch (PyTorch's pin_memory already caches pinned blocks).
                       Keep it in perspective: at batch 32 this saves about 3.7 ms per batch, about
                       0.25 s per epoch; compare with the epoch time from P1's profiling (Amdahl).
-Still to do:          second part of A4.14, the share of the copy in the GPU preprocessing time,
-                      needs P3's preprocess_batch_gpu. Re-run on P1's RTX 3050 for official numbers.
+                      Next: the second part of A4.14 (share of the copy in the GPU preprocessing
+                      time) needs P3's preprocess_batch_gpu; re-run on P1's RTX 3050.
 
 ### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina)   date: 2026-11-10
-Motivation:           A4.13 showed the PyTorch median (pad + F.unfold + torch.median) is slower
-                      than OpenCV at every batch size, because it runs 3 kernels and writes a 25x
-                      intermediate tensor to GPU memory.
-Implementation:       src/filters_numba.py (wrapper: filters_gpu.median_filter_numba). One thread
-                      per output pixel, 2D blocks of 16x16 threads, one grid layer (blockIdx.z) per
-                      image-channel slice. Each thread reads its 5x5 neighbours directly (coordinates
-                      clamped to the image = replicate padding), sorts them in a private
-                      cuda.local.array with an insertion sort and writes the middle value.
-                      One kernel launch, no padding tensor, no 25x copy. Window fixed at 5x5.
-Correctness:          tests/test_cpu_gpu_equivalence.py::test_median_filter_numba_equivalence
-                      PASSED on Colab T4 (same rule as the PyTorch median test). Also checked in
-                      Numba's CUDA simulator on 20x20 and 23x17 images (0% of pixels off by more
-                      than 1 gray level; 23x17 exercises the out-of-image threads).
+Config / commit:      none (script defaults); src/filters_numba.py and benchmarks/sweep_median.py
+                      at commit 9faff69
+Question:             A4.13 showed the PyTorch median (pad + F.unfold + torch.median) is slower than
+                      OpenCV at every batch size. Can a second GPU version, a fused custom Numba
+                      CUDA kernel, beat OpenCV and the PyTorch version while staying correct?
 Prediction:           No prediction was written before the run. Stated after the run: I expected
                       it to be only slightly faster than the CPU, and only at larger batch sizes.
 Command:              python -m pytest tests/test_cpu_gpu_equivalence.py -k numba -v
                       python benchmarks/sweep_median.py
-Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
+Result:               Correctness: test_median_filter_numba_equivalence PASSED on Colab T4 (same rule
+                      as the PyTorch median test); also 0% of pixels beyond 1 gray level in Numba's
+                      CUDA simulator on 20x20 and 23x17 images (23x17 exercises out-of-image threads).
+                      Speed: DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
                         batch    CPU (OpenCV)   PyTorch (A4.8)   Numba (A4.11)
                           1         0.76            4.80            1.33
                           8         0.80            3.79            0.51
@@ -159,7 +160,12 @@ Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050).
 Prediction vs result: Better than expected. The Numba kernel beats OpenCV from batch size 8 on
                       (1.5-1.8x faster) and is about 4.4x faster than the PyTorch version from
                       batch 32 on. At batch size 1 the CPU still wins (launch overhead).
-Explanation:          Fusion avoids the 25x memory copy: each thread reads its neighbours straight
+Explanation:          Implementation (src/filters_numba.py, wrapper filters_gpu.median_filter_numba):
+                      one thread per output pixel, 16x16 blocks, one grid layer (blockIdx.z) per
+                      image-channel slice; each thread reads its 5x5 neighbours with coordinates
+                      clamped to the image (= replicate padding), sorts them in a private
+                      cuda.local.array (insertion sort) and writes the middle value. Window fixed at 5x5.
+                      Fusion avoids the 25x memory copy: each thread reads its neighbours straight
                       into its private array instead of F.unfold writing a 25x larger tensor to GPU
                       memory and torch.median reading it back, and there is one kernel launch
                       instead of three. Same GPU and same idea (sort 25 values per pixel), so the
