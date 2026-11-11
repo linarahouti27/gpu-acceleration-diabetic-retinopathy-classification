@@ -1,0 +1,28 @@
+# A6.8 / A6.9 experiment: exp_resnet18
+# Compared with: baseline
+# One change:    train.model: reference_cnn -> resnet18
+# Hypothesis:    A pretrained ResNet-18 should learn better from 3,000 images; about 3.6x more FLOPs per image
+#   (A6.6), so slower per epoch.
+# Same splits (split_seed 42) and training budget (5 epochs) as every other experiment.
+seed: 42
+data:
+  split_seed: 42          # fixed in every experiment: identical train/val/test images
+  root: data/dr_dataset
+  image_size: [224, 224]
+  num_classes: 5
+  train_frac: 0.70
+  val_frac: 0.15
+  batch_size: 32
+  num_workers: 2
+preprocess:
+  clahe: true
+  circular_crop: true
+  normalize: true
+  gamma: 1.0
+train:
+  model: resnet18
+  epochs: 5
+  lr: 0.001
+  amp: false
+  weight_decay: 0.0
+  label_smoothing: 0.0
