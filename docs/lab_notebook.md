@@ -129,3 +129,36 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
   - **ResNet-18:** as we go through the layers, it runs on smaller and smaller maps (56 → 28 → 14 → 7). Stage 4 (512 channels, 7×7 maps) holds about 8.4 M of the 11.2 M parameters (75%) but only about 0.8 GFLOPs (23%). Its stem also shrinks the image to 56×56 right away.
   - **Reference CNN:** about 85% of its parameters are in one fully connected layer (`Linear(2048, 256)`, 524,544 weights), applied once per image, so almost free. Its convolutions have few weights but run on large maps: the first one (896 parameters) runs on the full 224×224 image.
 - **Decision:** keep ResNet-18 as the justified alternative model. Expected costs: about 3.6× more compute per image for training and inference, and 45 MB of weights (11.2 M × 4 bytes), which fits easily in GPU memory. 18× more parameters on 3,000 images could overfit; pretraining on ImageNet should limit that. Next: compare both models in A6.9 with the same splits and training budget, measuring epoch time, GPU memory and validation macro-F1.
+
+### A6.9 Redesign experiments: model, input representation, training strategy (P4: Lina) — 2026-11-11
+
+- **Config / commit:** `configs/baseline.yaml` and the 7 `configs/exp_*.yaml` (A6.8) at commit `4354816`. All use `split_seed: 42` (identical train/val/test images: 2116 / 425 / 458) and 5 epochs. Dataset: 2,999 images (image `2T2SALA702` is missing from the Zenodo archive), class counts 504 / 701 / 583 / 632 / 579, so **not balanced**, contrary to the brief.
+- **Question:** which single change to the model, the input representation or the training strategy improves validation macro-F1, and what does each change cost in epoch time?
+
+  | Run | One change | Compared with |
+  |---|---|---|
+  | `baseline_colab` | (reference) | — |
+  | `exp_baseline_seed43` | seed 42 → 43 (control: run-to-run variation) | baseline |
+  | `exp_resnet18` | model → resnet18 | baseline |
+  | `exp_resnet18_lr1e-4` | lr 0.001 → 0.0001 | exp_resnet18 |
+  | `exp_no_clahe` | clahe → false | baseline |
+  | `exp_res160` | image size 224 → 160 | baseline |
+  | `exp_augment` | augment → true | baseline |
+  | `exp_cosine` | scheduler → cosine | baseline |
+
+- **Prediction:** (written before the 7 experiment runs, after the baseline run)
+  - **Best macro-F1:** `exp_resnet18`.
+  - **Fastest per epoch:** `exp_no_clahe`.
+  - **Slowest per epoch:** `exp_augment`, because the baseline run showed the pipeline is CPU-bound: augmentation adds CPU work, while ResNet-18's extra work is on the GPU, which is already waiting. (My first guess was the baseline; I revised it before any experiment ran, after noticing that several runs do strictly more work than the baseline.)
+  - **Worst macro-F1:** `exp_no_clahe` and `exp_res160`, since less contrast and smaller images mean fewer visible details.
+- **Command:** `python src/train.py --config configs/<config>.yaml --device cuda --run <run>` on Colab, Tesla T4.
+- **Result:** DRAFT runs on Colab T4 (unoptimized pipeline; official runs later on P1's RTX 3050).
+
+  | Run | Best val macro-F1 | Best val acc | Train time / epoch | Train img/s |
+  |---|---|---|---|---|
+  | `baseline_colab` | 0.353 (epoch 4) | 0.391 | about 120 s | 18 |
+
+  Baseline notes: val macro-F1 still rising at epoch 4 (0.21 → 0.35), train loss decreasing (1.59 → 1.48): stopped before convergence. Chance level about 0.20–0.23. 18 img/s means about 110 ms of CPU work per image with 2 workers: CPU-bound (decoding, resizing, CLAHE), the GPU mostly waits. Total wall time 729 s.
+- **Prediction vs result:** (to be filled after the runs)
+- **Explanation:** (to be filled after the runs)
+- **Decision:** (to be filled after the runs)
