@@ -61,6 +61,65 @@ The average execution time is approximately 2.2 ms per image. The analysis of th
 
 The main bottleneck of this CPU function comes from the color space conversions, which together account for approximately 54.8% of the total execution time. To optimize this pipeline on GPU (A4.3), it will be essential to perform CLAHE directly on the reconstructed luminance channel or avoid these expensive color space conversions.
 
+### A4.12 Preprocessing test tolerances (P3: Inès)          date: 2026-11-11
+Scope:            the six preprocessing tests in `tests/test_cpu_gpu_equivalence.py` (the filter
+                  tests are covered by P4). 1 gray level = 1/255 ≈ 0.004.
+
+Circular crop (`atol=1e-5`):
+    Two issues. First, multiplying float32 pixels by a binary 0/1 mask is bit-exact in IEEE-754,
+    so CPU and GPU outputs have 0.0 difference; `atol=1e-5` is unnecessarily loose (0.0 or 1e-7
+    is enough). Second, `sample_batch()` already multiplies the test images by the exact same
+    circular mask (`r = min(h, w) // 2 - 2`) before calling the test! As a result, the corners
+    are already zero and a no-op `return t` would pass `test_circular_crop_equivalence`. The test
+    should use unmasked uniform images.
+
+Normalize (`atol=1e-5`):
+    Reasonable. `(t - mean) / std` in float32 differs by ~1e-7 between NumPy (CPU) and PyTorch
+    (GPU) due to FMA and division rounding. `1e-5` (~0.0025 of a gray level) is safe against
+    floating-point noise while still catching wrong channel constants or swapped mean/std.
+
+CLAHE equivalence (`np.corrcoef > 0.95` on mean RGB):
+    Using correlation instead of strict pixel-wise `allclose` is justified because OpenCV
+    equalizes `L*` in 8-bit CIELAB and converts `(L_eq, a, b)` back to RGB, whereas our GPU
+    implementation equalizes reconstructed CIE L* luminance in pure PyTorch and rescales RGB
+    channels proportionally (`(equalized + 1) / (lum + 1)`). However, `corrcoef > 0.95` has two
+    flaws:
+    1. Pearson correlation is invariant to scale and shift (`a * X + b`), so an output in
+       `[0, 255]` or `[0, 0.01]` would still pass. The test should also bound the range `[0, 1]`
+       and mean absolute error (e.g. `MAE < 0.05`).
+    2. `sample_batch()` zeros out ~22% of the image outside the circular mask; since both CPU
+       and GPU preserve those dark corners, correlation is artificially inflated. Correlation
+       should be computed only on pixels inside the circular mask.
+
+CLAHE batched vs single image (`atol=1e-5`):
+    Good specification. It verifies that flattening all `N * grid * grid` tiles into one
+    `scatter_add_` call does not leak counts across images in the batch. Actual differences are
+    `< 1e-6`, so `atol=1e-5` is appropriate.
+
+Full uint8 pipeline without CLAHE (`atol=1e-5`):
+    The tolerance `1e-5` is appropriate for chaining `uint8 -> float32 / 255.0`, circular crop,
+    and normalization. However, the test sets `gamma: 1.0`, leaving the non-trivial gamma branch
+    (`x.pow(gamma)`) untested; testing `gamma: 0.8` or `1.2` would make it complete.
+
+Augmentation shape, range, and per-image randomness:
+    Checking `out.shape == t.shape` and `out in [0, 1 + 1e-5]` is sound (`1e-5` accounts for
+    bilinear interpolation overshoot). However, the per-image randomness check
+    `not torch.allclose(out[0] - t[0], out[1] - t[1])` is flawed: `t[0]` and `t[1]` from
+    `sample_batch(8)` are already different random images, so `out[0] - t[0]` and `out[1] - t[1]`
+    would differ even if `augment_gpu` applied the exact same angle and flip to the entire batch!
+    To properly test independent per-image transforms, `t` should repeat the same image across
+    the batch (`t = t[0:1].expand(8, -1, -1, -1)`).
+
+GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
+                  `python -m pytest tests/test_cpu_gpu_equivalence.py -k "not gaussian and not median and not contrast" -v`
+                  test_circular_crop_equivalence                         PASSED
+                  test_normalize_equivalence                             PASSED
+                  test_clahe_equivalence_within_tolerance                PASSED
+                  test_clahe_batched_matches_single_image                PASSED
+                  test_uint8_batch_pipeline_matches_cpu_without_clahe    PASSED
+                  test_augment_gpu_shape_range_and_per_image_randomness  PASSED
+                  6 passed, 3 deselected in 3.19s
+
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
 Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
                   tests are covered by P3). 1 gray level = 1/255 ≈ 0.004.
