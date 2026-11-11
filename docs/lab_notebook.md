@@ -24,17 +24,18 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 (add yours below)
 
-### A2.3 : Prédiction de la répartition du temps (Baseline CPU)
-- **Prédiction :** Le prétraitement (CLAHE, crop, normalization) représente la part la plus importante du temps par époque, en raison des conversions d'espaces colorimétriques sur le CPU et de l'absence de cache initial.
-- **Justification :** Les opérations OpenCV en séquentiel bloquent le pipeline avant même la passe avant (forward).
+### A2.3: Prediction of Time Distribution (CPU Baseline)
 
-### A2.7 : Profilage fin avec line_profiler
-- **Résultat :** Le profilage de `apply_clahe` a révélé que la ligne `cv2.cvtColor(u8, cv2.COLOR_RGB2LAB)` consomme **91,0 % du temps total** de la fonction.
-- **Comparaison :** Un profilage global classique (cProfile) aurait simplement indiqué que la fonction apply_clahe prend environ 0,1 seconde au total, sans plus de détails.
-- **Conclusion :** Ce profilage prouve que si l'on veut accélérer ce pipeline sur GPU, il ne suffit pas de réécrire l'algorithme CLAHE : il faut repenser l'ensemble du traitement en évitant les allers-retours coûteux entre les espaces de couleurs sur le CPU, ou en exploitant un pipeline de tenseurs entièrement sur le GPU.
+- **Prediction:** Preprocessing (CLAHE, cropping, and normalization) is expected to account for the largest share of the execution time per epoch, due to CPU color space conversions and the initial absence of caching.
+- **Justification:** Sequential OpenCV operations block the pipeline before the forward pass even begins.
 
-- **Conclusion du profilage (Moyenne sur 7 itérations)**
+### A2.7: Fine-Grained Profiling with line_profiler
 
+- **Result:** Profiling the `apply_clahe` function revealed that color space conversions account for a significant proportion of its execution time.
+- **Comparison:** A standard profiling tool such as `cProfile` would only indicate that the `apply_clahe` function takes approximately 0.1 seconds overall, without providing details about the execution time of individual operations.
+- **Conclusion:** This profiling demonstrates that accelerating the pipeline on GPU requires more than simply rewriting the CLAHE algorithm. The entire processing pipeline must be reconsidered to avoid costly CPU color space conversions and to take advantage of a fully GPU-based tensor pipeline.
+
+- **Conclusion of Profiling (Average over 7 iterations)**
 
 **Moyenne des 7 exécutions du profilage**
 
@@ -49,17 +50,16 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 | 27 | 1 | 100,700.0 | 100,700.0 | 4.5% | `l, a, b = cv2.split(lab)` |
 | 28 | 1 | 568,260.4 | 568,260.4 | 25.4% | `cl = cv2.createCLAHE(clipLimit=clip, tileGridSize=(grid, grid)).apply(l)` |
 | 29 | 1 | 746,284.0 | 746,284.0 | 33.3% | `out = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)` |
-| 30 | 1 | 149,977.3 | 149,977.3 | 6.7% | `return out.astype(np.float32) / 255.0` |
+| 30 | 1 | 149,977.3 | 149,977.3 | 6.7% | `return out.astype(np.float32) / 255.0`
 
+The average execution time is approximately 2.2 ms per image. The analysis of the execution time distribution shows that the histogram equalization algorithm itself is not the main bottleneck:
 
+- **Color space conversion overhead:** The RGB-to-LAB conversion (line 26) accounts for 21.5% of the total execution time, while the reverse LAB-to-RGB conversion (line 29) is the most expensive operation, accounting for 33.3%.
+- **Algorithm execution cost:** The actual CLAHE operation (line 28) accounts for only 25.4% of the total execution time.
 
-Le temps total moyen d'exécution est de ~2.2 ms par image. L'analyse de la répartition du temps montre que l'algorithme d'égalisation d'histogramme n'est pas le véritable goulot d'étranglement :
+**Conclusion:**
 
-* **Le coût des conversions (L'overhead) :** Les étapes de conversion d'espace colorimétrique consomment la majorité du temps de calcul. La conversion RGB vers LAB (ligne 26) prend 21,5 % du temps, et le retour de LAB vers RGB (ligne 29) représente l'opération la plus lourde avec 33,3 % du temps.
-* **Le coût de l'algorithme :** En comparaison, l'application effective du filtre CLAHE (ligne 28) ne représente que 25,4 % du temps total.
-
-**Conclusion :** 
-Le ralentissement (bottleneck) de cette fonction CPU provient majoritairement (~54,8 %) des allers-retours entre les espaces de couleurs nécessaires pour isoler le canal de luminance. Pour optimiser ce pipeline sur le GPU (A4.3), il sera crucial de calculer le CLAHE directement sur la luminance reconstituée ou d'éviter ces conversions complexes de l'API OpenCV.
+The main bottleneck of this CPU function comes from the color space conversions, which together account for approximately 54.8% of the total execution time. To optimize this pipeline on GPU (A4.3), it will be essential to perform CLAHE directly on the reconstructed luminance channel or avoid these expensive color space conversions.
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
 Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
