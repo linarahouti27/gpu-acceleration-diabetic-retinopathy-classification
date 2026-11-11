@@ -303,3 +303,56 @@ Decision:             The fused kernel is the GPU median filter worth keeping. T
                       partially sorting up to the 13th value). Re-run on P1's RTX 3050.
 
 dd9e6c75b5b8280f1223d1815229da0d7efba42b
+
+### A4.16 Checkpoint questions (P3: Inès & P4: Lina)          date: 2026-11-11
+
+1. Why can a GPU kernel be slower than OpenCV on a single 224x224 image?
+   - Fixed kernel launch and dispatch overhead: Every PyTorch GPU operation incurs a fixed CPU
+     dispatch and CUDA kernel launch latency (~5-20 us per kernel). Multi-step functions like
+     `clahe_gpu` (color conversion, tiling, `scatter_add_`, `cumsum`, bilinear interpolation)
+     and `median_filter_gpu` (pad, `F.unfold`, `torch.median`) launch several kernels in
+     sequence. At batch size 1, this fixed overhead dominates the runtime (e.g. CLAHE takes
+     2.24 ms on GPU vs 2.26 ms on CPU; PyTorch median takes 3.58 ms on GPU vs 0.73 ms on CPU).
+   - GPU under-utilization: A single 224x224 image has only 50,176 pixels (and only 64 tiles of
+     28x28 in CLAHE), which is far too small to saturate the thousands of CUDA cores on a T4 or
+     RTX 3050 and hide global memory latency.
+   - Cache-friendly SIMD CPU baseline: A single 224x224x3 uint8 image is ~150 KB and fits
+     entirely inside CPU L1/L2 cache. OpenCV runs compiled C++ with AVX2/SIMD vectorization and
+     specialized 8-bit integer algorithms with virtually zero launch overhead.
+
+2. The median filter with `unfold` uses `ksize^2` times the input memory. What does that limit?
+   - Memory footprint: For an input batch of shape (N, C, H, W) in float32 (0.60 MB per
+     3x224x224 image), `F.unfold` materializes an intermediate tensor of shape
+     (N, C * ksize^2, H * W). For ksize = 5, that is 25x the input size (15.05 MB per image, or
+     ~1.93 GB for batch size 128 before accounting for `torch.median`'s output/sorting buffers).
+   - What it limits:
+     (a) Maximum batch size (N) and spatial resolution (H x W) before triggering a CUDA
+         Out-Of-Memory (OOM) error, especially on GPUs with limited VRAM such as P1's RTX 3050
+         (where model weights, activations, and gradients must also fit in memory).
+     (b) Kernel window size (`ksize`): increasing `ksize` from 5 (25x) to 9 (81x) or 11 (121x)
+         scales memory consumption quadratically.
+     (c) Throughput (memory-bandwidth bottleneck): writing a 25x intermediate tensor to global
+         DRAM and reading it back in `torch.median` saturates memory bandwidth, keeping the
+         PyTorch median filter slower than the CPU across all batch sizes (2.44 ms/img vs
+         0.84-1.10 ms/img), whereas fusing padding + reading + sorting in registers with Numba
+         (A4.11) eliminates the 25x copy and drops runtime to 0.55 ms/img.
+
+3. Your CLAHE is not bit-identical to OpenCV (different color space). Does the difference matter
+   for classification? How would you test that, using A6?
+   - In principle, it doesn't matter. Both CPU OpenCV (`apply_clahe` in 8-bit CIELAB) and GPU
+     PyTorch (`clahe_gpu` on reconstructed CIE L* with proportional RGB scaling) perform local
+     8x8 tiled histogram equalization (`clip=2.0`) with >0.95 luminance correlation, preserving
+     the local contrast of retinal lesions (microaneurysms, hemorrhages, exudates). Minor
+     pixel-level differences act like small photometric perturbations that CNNs trained with data
+     augmentation and normalization are insensitive to, provided the same CLAHE implementation is
+     used consistently during both training and evaluation.
+   - How to test it using the A6 controlled comparison protocol:
+     (a) Controlled training comparison: Fix `data.split_seed`, model architecture, training
+         budget (epochs), and hyperparameters. Train two configurations across 3 random `seed`s
+         each: one preprocessed with CPU OpenCV `apply_clahe` and one with `clahe_gpu`. Compare
+         validation accuracy and loss curves (`mean +/- std`). If the difference falls within
+         seed-to-seed variance, the color-space approximation has no impact on classification.
+     (b) Train/eval mismatch test (`evaluate.py`): Evaluate a checkpoint trained with CPU CLAHE
+         on validation data preprocessed with `clahe_gpu` (and vice versa) to check whether
+         switching implementations at inference time introduces any accuracy drop.
+
