@@ -200,3 +200,46 @@ Prediction vs result: Proportions matched the prediction (about 70/15/15). Class
                       
 Explanation:          patient_id is the filename text before the last "_". split_by_patient groups images by patient id and assigns each whole patient to one split. The patient union equals 1918 and all pairwise intersections are empty, so there is no leakage. Per-class fractions are not exact (e.g. class 0 has 68% in train) because whole patients move together. Patient-level splitting is needed because 3000 images come from 1918 patients: images of one patient are near-duplicates, so an image-level split would let the model recognise the patient instead of the disease and inflate val/test scores. 2999 vs 3000: 
 Decision:             Split is valid and patient-safe; keep it unchanged. Proceed to A2.
+
+### A2.1 GpuTimer synchronizes the GPU          date: 2026-11-11
+Config / commit:      src/utils.py @ dd9e6c7
+
+Question:             Does timing a GPU operation without torch.cuda.synchronize()
+                      change the measurement, and by how much?
+Prediction:           No-sync: well under 1 ms (kernel launch only). Synced: tens of
+                      ms (real compute of a 4096x4096 float32 matmul on a T4).
+                      Reason: CUDA kernels are asynchronous, so perf_counter returns
+                      once the kernel is queued, not when it finishes.
+Command:              4096x4096 float32 matmul on cuda, 3 warm-up runs followed by
+                      torch.cuda.synchronize(); 10 trials, each timed once with
+                      perf_counter (no sync) and once with GpuTimer("cuda"), with a
+                      torch.cuda.synchronize() before each measurement. CUDA events
+                      used as an independent reference (1 run).
+Result:               GPU: Tesla T4 (Colab).
+                      First single run: no-sync 0.264 ms, synced 35.420 ms (~134x).
+                      n=10: no-sync 0.102 +/- 0.034 ms, synced 36.211 +/- 0.343 ms,
+                      ratio 356x.
+                      CUDA events reference: 47.788 ms (1 run).
+Prediction vs result: Orders of magnitude matched: no-sync well under 1 ms, synced
+                      tens of ms. The synced value (36.2 ms) is lower than the single
+                      CUDA-events run (47.8 ms); the events value is one sample taken
+                      right after warm-up, while the 10-trial series is stable (std
+                      about 1% of the mean). The ratio varies between runs (134x vs
+                      356x) because the no-sync value is tiny and noisy, so the
+                      ratio is only indicative; the two times are the real result.
+Explanation:          Without synchronize, perf_counter returns before the matmul
+                      finishes on the GPU, so it measures kernel-launch latency
+                      (a fraction of a millisecond) instead of kernel execution
+                      (tens of milliseconds). GpuTimer fixes this by calling
+                      torch.cuda.synchronize() in __enter__ (so earlier queued work
+                      is not counted) and in __exit__ (so the region's work has
+                      really finished) before each clock read. It synchronizes only
+                      when the device is CUDA, so CPU runs are unaffected.
+                      Failed attempts (kept as evidence): my first runs gave
+                      synced < no-sync (about 0.05 ms vs 0.26 ms) because GpuTimer
+                      in src/utils.py did not contain the fix (the class held only
+                      its docstring), so it measured launch time only. After
+                      rewriting the class, GpuTimer gave about 36 ms.
+Decision:             Keep the synchronized GpuTimer. Push p2-loading so P1, P3 and
+                      P4 use it for all GPU measurements. TODO(A2.1) removed from
+                      src/utils.py.

@@ -16,7 +16,7 @@ def set_seed(seed: int):
 
 
 class GpuTimer:
-      """Wall-clock timer. Use as: `with GpuTimer(device) as t: ...` then `t.elapsed`.
+    """Wall-clock timer. Use as: `with GpuTimer(device) as t: ...` then `t.elapsed`.
 
     CUDA kernels are asynchronous, so perf_counter alone only measures the
     time to launch them. When the device is CUDA, we call
