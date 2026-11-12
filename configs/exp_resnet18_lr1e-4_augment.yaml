@@ -1,0 +1,29 @@
+# A6.8 / A6.9 experiment: exp_resnet18_lr1e-4_augment
+# Compared with: exp_resnet18_lr1e-4
+# One change:    preprocess.augment: false -> true
+# Hypothesis:    Augmentation reduces ResNet-18's overfitting (exp_resnet18_lr1e-4: train acc 0.96
+#   vs val acc 0.55), so val macro-F1 should be higher than 0.55; epoch time about +2% (extra CPU work).
+# Same splits (split_seed 42) and training budget (5 epochs) as every other experiment.
+seed: 42
+data:
+  split_seed: 42          # fixed in every experiment: identical train/val/test images
+  root: data/dr_dataset
+  image_size: [224, 224]
+  num_classes: 5
+  train_frac: 0.70
+  val_frac: 0.15
+  batch_size: 32
+  num_workers: 2
+preprocess:
+  clahe: true
+  circular_crop: true
+  normalize: true
+  gamma: 1.0
+  augment: true
+train:
+  model: resnet18
+  epochs: 5
+  lr: 0.0001
+  amp: false
+  weight_decay: 0.0
+  label_smoothing: 0.0
