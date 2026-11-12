@@ -151,10 +151,11 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
             print(f"epoch {epoch}: train_loss={tr_loss:.4f} train_acc={tr_acc:.4f} "
                   f"val_acc={va_acc:.4f} val_f1={va_f1:.4f} train_time={ttr.elapsed:.2f}s "
                   f"({n_tr / ttr.elapsed:.0f} img/s)", flush=True)
-            if va_acc > best_val:          # model selection on VAL only, never on test
-                best_val = va_acc
+            if va_f1 > best_val:   # select on VAL macro-F1, never on test: fairer than accuracy
+                                   # on our imbalanced classes (504-701 images per grade)
+                best_val = va_f1
                 torch.save({"model": model.state_dict(), "cfg": cfg, "val_acc": va_acc,
-                            "epoch": epoch}, os.path.join(ckpt_dir, "best.pt"))
+                            "val_f1": va_f1, "epoch": epoch}, os.path.join(ckpt_dir, "best.pt"))
     finally:
         if mon is not None:
             mon.__exit__(None, None, None)
@@ -166,9 +167,9 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
                "gpu_preprocess": gpu_pre_on, "augment": augment, "splits": split_sizes,
                "setup_time_s": setup_s, "wall_time_s": wall_s,
                "cold_epoch_s": epoch_times[0], "steady_epoch_s": sum(steady) / len(steady),
-               "best_val_acc": best_val, "history": history},
+               "best_val_f1": best_val, "history": history},
               os.path.join(out_dir, "history.json"))
-    print(f"[train:{run}] best val_acc={best_val:.4f}; wall={wall_s:.1f}s; "
+    print(f"[train:{run}] best val_f1={best_val:.4f}; wall={wall_s:.1f}s; "
           f"history -> {out_dir}/history.json", flush=True)
     return history
 
