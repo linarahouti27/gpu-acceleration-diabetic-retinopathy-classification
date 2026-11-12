@@ -204,11 +204,28 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 ### A7.2–A7.3 GPU profiler: test run on the baseline pipeline (P4: Lina) — 2026-11-12
 
-- **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `17badda` (first run).
+- **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `8960169` (after two fixes, see Explanation).
 - **Question:** during steady-state training of the unoptimized baseline, what fraction of the time is the GPU idle, and how much of its busy time is host-to-device copies?
 - **Prediction:** a batch of 32 arrives about every 1,900 ms (about 17 img/s); one training step of the reference CNN is about 100 GFLOPs, about 33 ms on a T4 (about 3,000 GFLOP/s in practice). So the GPU idle fraction should be about 0.98. Copies should be a small part of the busy time (about 4 ms of copy per batch from A4.14, vs about 33 ms of kernels: about 10%).
-- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps).
-- **Result:** first run (commit `17badda`): **invalid profile**. The profiler kept no GPU events (GPU busy 0 ms, idle fraction 1.0, `top_ops.txt` contains only one `cudaDeviceSynchronize`, no `trace.json`). Valid parts (not from the profiler): 1,747 ms per step (one batch of 32 every 1.75 s, about 18 img/s, matching training) and 289 MB copied in 15 steps (15 × 32 × 3 × 224 × 224 × 4 bytes: float32 batches).
-- **Prediction vs result:** cannot be compared yet; the measured step time (1,747 ms) is close to the predicted 1,900 ms.
-- **Explanation:** bug in the script: `torch.profiler.schedule` repeats by default (`repeat=0`), so after the 15 active steps it started a new, empty cycle, and the recorded steps were discarded when the loop ended.
-- **Decision:** fixed with `repeat=1` (record one cycle only); re-run the test to get the idle fraction.
+- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps). `trace.json` is not committed (`.gitignore`: large file).
+- **Result:** DRAFT on Colab T4 (`results/torch_profiler_baseline/summary.json`):
+
+  | | Prediction | Measured, per step |
+  |---|---|---|
+  | Time per step | ~1,900 ms | 1,677 ms |
+  | GPU kernels | ~33 ms | 68 ms |
+  | Host-to-device copy | ~4 ms | 11 ms (float32 from pageable memory, 1.76 GB/s) |
+  | GPU busy (union of all GPU intervals) | — | 78 ms |
+  | Copies' share of busy time | ~10% | 14% |
+  | **GPU idle fraction** | **~0.98** | **0.953** |
+
+  Kernels + copies (1,187 ms over 15 steps) slightly exceed the busy time (1,174 ms): 13 ms where a copy and a kernel overlapped, counted once by `union_length`.
+- **Prediction vs result:** the main prediction holds: the GPU is idle 95% of the time. The kernels take about 2× the estimate (68 vs 33 ms): 3,000 GFLOP/s was optimistic for a small network whose layers don't fill the GPU. The copy is about 3× slower than in the A4.14 benchmark (11 ms vs 4 ms; 1.76 vs 4.7 GB/s from pageable memory).
+- **Explanation:**
+  - **The GPU waits for the CPU:** the CPU takes time decoding the images, so the GPU finishes its 78 ms of work and then stays idle while waiting for the next batch (about 1.6 s). This directly confirms the A6.9 experiments, where changing the GPU's workload barely changed the epoch time.
+  - **The copy is slower during training** than in the isolated A4.14 benchmark, because a copy from pageable memory needs the CPU (an extra staging copy), and the 2 CPU cores are busy loading data.
+  - **Two bugs fixed in the script before this result** (both in the profiler setup, not in the measurement): the default `schedule` repeats (`repeat=0`), so the recorded steps were discarded (first run: idle 1.0) → `repeat=1`; and the `ProfilerStep#N` labels on the GPU timeline were counted as kernels (second run: kernel time 1,783 ms > busy time 1,353 ms, impossible) → excluded.
+- **Decision:**
+  - **P2's work should help the most:** the decoded-image cache (A3) removes the repeated decoding, the main cost.
+  - **For the copy:** copy uint8 batches from pinned memory, as A4.14 showed: pinned memory is P2's DataLoader option (A5.1), and copying uint8 needs P3's GPU preprocessing plugged in by P2's hook (A5.3).
+  - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
