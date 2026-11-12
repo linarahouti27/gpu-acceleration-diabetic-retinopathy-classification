@@ -8,12 +8,12 @@
   "channels_last": false,
   "warmup_steps": 5,
   "profiled_steps": 15,
-  "wall_ms": 26212.0426460001,
-  "wall_ms_per_step": 1747.46950973334,
-  "gpu_kernel_ms": 0.0,
-  "h2d_memcpy_ms": 0.0,
+  "wall_ms": 25075.057033999656,
+  "wall_ms_per_step": 1671.6704689333103,
+  "gpu_kernel_ms": 1783.0169190000154,
+  "h2d_memcpy_ms": 197.2178210000012,
   "h2d_bytes": 289017600,
   "d2h_memcpy_ms": 0.0,
-  "gpu_busy_ms": 0.0,
-  "gpu_idle_fraction": 1.0
+  "gpu_busy_ms": 1353.1010979999728,
+  "gpu_idle_fraction": 0.946037965290955
 }
