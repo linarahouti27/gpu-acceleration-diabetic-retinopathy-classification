@@ -180,3 +180,35 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
   - **Best model so far: ResNet-18 with lr 0.0001** (val macro-F1 0.55), with two caveats: one seed only, and its saved checkpoint is epoch 0 (F1 0.527) because `train.py` selects by val accuracy. Propose to the team to select the checkpoint by val macro-F1 (our main metric, since the classes are not balanced), for all runs.
   - **Next experiment:** `exp_resnet18_lr1e-4_augment` (one change vs `exp_resnet18_lr1e-4`: augment → true), to fight its overfitting.
   - **For the team:** decoding is the main cost of every epoch, which supports P2's decoded-image cache (A3).
+
+#### A6.9 follow-up: `exp_resnet18_lr1e-4_augment` (P4: Lina) — 2026-11-12
+
+- **Config / commit:** `configs/exp_resnet18_lr1e-4_augment.yaml` at commit `9564746`; one change vs `exp_resnet18_lr1e-4`: `preprocess.augment: false -> true`.
+- **Question:** does augmentation reduce ResNet-18's overfitting (lr 0.0001: final train acc 0.96 vs val acc 0.55), and does it improve val macro-F1?
+- **Prediction:** val macro-F1 above 0.55; epoch time about +2% (extra CPU work); lower training accuracy (training with augmentation is harder); a smaller train–val gap.
+- **Command:** `python src/train.py --config configs/exp_resnet18_lr1e-4_augment.yaml --device cuda --run exp_resnet18_lr1e-4_augment` (Colab T4, new session).
+- **Result:** DRAFT run on Colab T4.
+
+  | | `exp_resnet18_lr1e-4` | `exp_resnet18_lr1e-4_augment` |
+  |---|---|---|
+  | Best val macro-F1 (epoch) | 0.550 (4) | 0.553 (3) |
+  | Final train accuracy | 0.955 | 0.775 |
+  | Final val accuracy | 0.553 | 0.569 |
+  | Train–val accuracy gap | 0.40 | 0.21 |
+  | Train time / epoch | 126 s | 123 s (different session) |
+
+  Per epoch with augmentation: val F1 0.48 → 0.50 → 0.50 → 0.55 → 0.55; train accuracy 0.49 → 0.61 → 0.68 → 0.72 → 0.78.
+- **Prediction vs result:** lower training accuracy and smaller gap: right (the gap is halved). Val macro-F1 0.553 is above 0.55, but +0.003 is within the run-to-run variation, so no real improvement. Epoch time: −2% instead of +2%, but the run was in a different Colab session, so the times are not comparable.
+- **Explanation:** augmentation did what it is for: the model memorizes much less (train accuracy 0.78 instead of 0.96), but within 5 epochs this did not turn into better validation F1. The model was still improving at the end (train accuracy rising, best val accuracy at epoch 4): with augmentation, a model usually needs more epochs to benefit.
+- **Decision:** keep augmentation as an option for the final ResNet-18 recipe (it halves overfitting at almost no cost). Hypothesis to test if time allows: with a longer training budget for both runs, augmentation should improve val macro-F1.
+
+### A7.2–A7.3 GPU profiler: test run on the baseline pipeline (P4: Lina) — 2026-11-12
+
+- **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `17badda` (first run).
+- **Question:** during steady-state training of the unoptimized baseline, what fraction of the time is the GPU idle, and how much of its busy time is host-to-device copies?
+- **Prediction:** a batch of 32 arrives about every 1,900 ms (about 17 img/s); one training step of the reference CNN is about 100 GFLOPs, about 33 ms on a T4 (about 3,000 GFLOP/s in practice). So the GPU idle fraction should be about 0.98. Copies should be a small part of the busy time (about 4 ms of copy per batch from A4.14, vs about 33 ms of kernels: about 10%).
+- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps).
+- **Result:** first run (commit `17badda`): **invalid profile**. The profiler kept no GPU events (GPU busy 0 ms, idle fraction 1.0, `top_ops.txt` contains only one `cudaDeviceSynchronize`, no `trace.json`). Valid parts (not from the profiler): 1,747 ms per step (one batch of 32 every 1.75 s, about 18 img/s, matching training) and 289 MB copied in 15 steps (15 × 32 × 3 × 224 × 224 × 4 bytes: float32 batches).
+- **Prediction vs result:** cannot be compared yet; the measured step time (1,747 ms) is close to the predicted 1,900 ms.
+- **Explanation:** bug in the script: `torch.profiler.schedule` repeats by default (`repeat=0`), so after the 15 active steps it started a new, empty cycle, and the recorded steps were discarded when the loop ended.
+- **Decision:** fixed with `repeat=1` (record one cycle only); re-run the test to get the idle fraction.

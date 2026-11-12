@@ -92,7 +92,9 @@ def main():
     h2d_bytes = 0
     batches = iter(loader)
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                 schedule=schedule(wait=0, warmup=args.warmup, active=args.steps)) as prof:
+                 # repeat=1: record ONE cycle. With the default (repeat=0) the schedule starts a new,
+                 # empty cycle after the active steps, and the recorded steps are discarded.
+                 schedule=schedule(wait=0, warmup=args.warmup, active=args.steps, repeat=1)) as prof:
         for step in range(n_steps):
             if step == args.warmup:                  # the recorded window starts here
                 torch.cuda.synchronize()
