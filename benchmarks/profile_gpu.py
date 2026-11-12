@@ -117,7 +117,10 @@ def main():
         wall_us = (time.perf_counter() - t0) * 1e6
 
     # ---- A7.3: analyse the GPU events of the recorded steps ----
-    gpu_events = [e for e in prof.events() if e.device_type == DeviceType.CUDA]
+    # GPU events only, without the "ProfilerStep#N" labels: those are markers the profiler puts
+    # on the GPU timeline around each step, not real GPU work (counting them inflated the times).
+    gpu_events = [e for e in prof.events()
+                  if e.device_type == DeviceType.CUDA and not e.name.startswith("ProfilerStep")]
     if not gpu_events:
         print("WARNING: the profiler recorded no GPU events", flush=True)
 
