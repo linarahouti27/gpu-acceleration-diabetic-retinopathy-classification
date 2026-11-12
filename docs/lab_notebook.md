@@ -356,3 +356,60 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
          on validation data preprocessed with `clahe_gpu` (and vice versa) to check whether
          switching implementations at inference time introduces any accuracy drop.
 
+### A6.4 & A6.11 Evaluation & Training Acceleration Checkpoint Questions (P3: Inès)   date: 2026-11-12
+
+0. Why inference time and training time must not be mixed up (A6.4):
+   - Training runs the forward pass, stores all intermediate layer activations in GPU memory to
+     build the autograd graph, executes the backward pass (~2x the compute of the forward pass
+     to compute gradients with respect to both activations and weights), updates parameters via
+     the optimizer (`AdamW` + `GradScaler`), and applies random data augmentation.
+   - Evaluation (`model.eval()` under `torch.no_grad()`) executes only the forward pass without
+     saving intermediate activations, without backward/optimizer steps, and without random
+     augmentations (`augment=False`). Consequently, inference throughput (images/s) is typically
+     ~3x higher and uses a fraction of the VRAM compared to training; comparing or averaging
+     the two would distort throughput and speedup claims.
+
+1. With AMP (`torch.autocast`), which operations stay in float32 and why?
+   - Operations cast to FP16: compute-heavy matrix multiplications and convolutions (`nn.Conv2d`,
+     `nn.Linear`, `bmm`, `matmul`), which leverage Tensor Cores on CUDA GPUs for higher math
+     throughput and halved activation memory traffic.
+   - Operations that stay in FP32: reductions (`sum`, `mean`, `var`, `norm`), normalization layers
+     (`BatchNorm2d`, `LayerNorm`), exponentials/logarithms and large-dynamic-range pointwise ops
+     (`exp`, `log`, `pow`, `softmax`, `log_softmax`), and loss functions (`CrossEntropyLoss`).
+     Master model weights and `AdamW` optimizer moments (`exp_avg`, `exp_avg_sq`) also remain in
+     FP32.
+   - Why: IEEE-754 FP16 has only 5 exponent bits (max value 65,504; subnormal underflow below
+     ~6e-5) and 10 mantissa bits (~3 decimal digits of precision). Computing `exp(x)` in
+     `softmax`/`CrossEntropyLoss` overflows to `inf` for logits > 11.1, while summing thousands
+     of elements in `BatchNorm` statistics or loss reductions suffers from catastrophic precision
+     loss (swamping when adding small numbers to a large running sum). Keeping reductions,
+     normalizations, losses, and master weights in FP32 preserves numerical stability while
+     retaining almost all the speed and memory benefits of FP16 convolutions.
+
+2. Why does a bigger batch size sometimes lower validation accuracy at the same learning rate?
+   - Fewer gradient updates per epoch: For a fixed dataset size N and a fixed number of epochs,
+     multiplying the batch size B by k reduces the number of optimizer steps per epoch (N / B)
+     by a factor of k. At the same learning rate, the model performs k times fewer parameter
+     updates and travels a shorter distance in weight space, leading to under-convergence within
+     the fixed epoch budget (unless the learning rate is scaled up, e.g. linear or sqrt scaling
+     with warmup).
+   - Loss of stochastic gradient noise (generalization gap): Small batches introduce higher
+     gradient variance across mini-batches, acting as implicit regularization that helps the
+     optimizer escape sharp local minima and settle into flatter basins of the loss landscape.
+     Very large batches compute nearly deterministic gradients and tend to converge to sharp
+     minima that generalize worse to unseen validation data.
+
+3. Is the accuracy difference between two runs larger than the difference between two seeds of
+   the same run? How many seeds do you need to say?
+   - Signal vs seed noise: Deep learning training is stochastic (random weight initialization,
+     mini-batch shuffling, and random flip/rotation augmentations). A single run cannot tell
+     whether a +0.8% validation accuracy gain comes from a genuine model/recipe improvement or
+     a lucky random seed. A change is only statistically meaningful if the difference between
+     configuration means exceeds the seed-to-seed variability (|mean_A - mean_B| > 2 * SE).
+   - How many seeds: Following our project protocol, `data.split_seed` is kept fixed so the
+     train/val split is identical, and at least n = 3 training `seed`s must be run per
+     configuration to report `mean +/- std` (2 degrees of freedom). While 3 seeds are the
+     practical minimum under a tight compute budget to detect large effects (>1.5-2%), small
+     accuracy differences (<0.5-1%) require 5 to 10 seeds because the Student-t critical value
+     at n = 3 (df = 2) is very wide (t_0.975 = 4.30 vs 2.78 at n = 5).
+
