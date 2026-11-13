@@ -9,6 +9,14 @@ Limitation: the window is fixed at 5x5 (cuda.local.array needs a compile-time si
 Kept in its own file so that only this module needs Numba.
 """
 import math
+import numpy as np
+
+# Compatibility patch: numba-cuda 0.30 still refers to np.row_stack, which recent NumPy versions
+# (e.g. 2.5) removed. It was only another name for np.vstack, so put the old name back before
+# Numba loads. Does nothing when NumPy still has it (e.g. on Colab). Known issue, see README.
+if not hasattr(np, "row_stack"):
+    np.row_stack = np.vstack
+
 import numba
 import torch
 from numba import cuda
