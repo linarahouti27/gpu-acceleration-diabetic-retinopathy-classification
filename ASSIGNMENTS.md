@@ -162,7 +162,6 @@ Decoding once and reading raw uint8 pixels from a memory-mapped file removes it.
 1. **TODO(A3.1)** Implement `build_cache` in `src/data_loader.py`.
 2. **TODO(A3.2)** Use the cache inside `DRDataset.load`.
 3. **TODO(A3.3)** Build the cache in `make_loaders` when `data.cache_dir` is set.
-4. **TODO(A3.4)** `python -m pytest tests/test_data_pipeline.py -v` must pass.
 5. **TODO(A3.5)** **Predict, then measure** the loading stage with and without the cache (use
    `benchmarks/benchmark_stages.py`). Separate three situations: first run (cache is built),
    warm cache, and cold operating-system file cache. Report the cache size in MB and compare it
