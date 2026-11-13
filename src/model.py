@@ -1,5 +1,6 @@
 """Model zoo. The reference CNN is given; the alternative is part of assignment A6."""
 import torch.nn as nn
+from torchvision import models
 
 
 class ReferenceCNN(nn.Module):
@@ -26,9 +27,10 @@ class ReferenceCNN(nn.Module):
 def build_model(name, num_classes):
     if name == "reference_cnn":
         return ReferenceCNN(num_classes)
-    # TODO(A6.6): add a justified alternative, for example name == "resnet18":
-    #   a torchvision ResNet-18 with ImageNet weights and the last layer replaced by
-    #   nn.Linear(in_features, num_classes). Or choose another lightweight model and
-    #   justify the choice in the report. Count parameters and FLOPs for both models.
-    #   Remember: change ONE variable at a time when you compare against the reference CNN.
+    elif name == "resnet18":
+        # A6.6: ResNet-18 pretrained on ImageNet (transfer learning: only 3,000 training images),
+        # last layer replaced to predict the 5 DR grades. DEFAULT = IMAGENET1K_V1 in torchvision 0.15+.
+        resnet_18 = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        resnet_18.fc = nn.Linear(resnet_18.fc.in_features, num_classes)
+        return resnet_18
     raise ValueError(f"unknown model: {name}")
