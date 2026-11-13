@@ -69,8 +69,8 @@ class DRDataset(Dataset):
 
     def load(self, idx):
         """Decode + resize only (the 'loading' stage). Returns HWC uint8."""
-        # TODO(A3.2): if self.cache is not None, return the cached uint8 image
-        #             (np.asarray(self.cache[idx])) instead of decoding from disk.
+        if self.cache is not None:
+            return np.asarray(self.cache[idx])
         path, _ = self.items[idx]
         with Image.open(path) as im:
             im = im.convert("RGB").resize(self.image_size, Image.Resampling.BILINEAR)
@@ -114,21 +114,48 @@ def get_preprocess_transform(cfg, augment=False):
 
 
 def build_cache(items, image_size, cache_dir, workers=8):
-    """TODO(A3.1): decode + resize every image ONCE into a uint8 array on disk.
-
-    Requirements:
-      - return a read-only np.memmap of shape (len(items), H, W, 3), dtype uint8,
-        where cache[i] equals DRDataset(items, image_size).load(i)
-      - image_size is (W, H) as in the config; the array is (N, H, W, 3)
-      - write to a temporary file and rename it, so an interrupted run never
-        leaves a half-written cache behind (on Windows, delete the memmap object
-        before os.replace: a mapped file cannot be renamed)
-      - the file name must change when the image list or the size changes
-        (hint: hashlib.md5 over the paths), so a stale cache is never reused
-      - fill the array with a thread pool (PIL releases the GIL while decoding)
-    Test: tests/test_data_pipeline.py::test_cache_matches_direct_decode
-    """
-    raise NotImplementedError("TODO(A3.1): build_cache")
+    import hashlib
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    hasher = hashlib.md5()
+    for path, label in items:
+        hasher.update(path.encode("utf-8"))
+        hasher.update(str(label).encode("utf-8"))
+    hasher.update(str(image_size).encode("utf-8"))
+    cache_sig = hasher.hexdigest()[:16]
+    
+    W, H = image_size
+    shape = (len(items), H, W, 3)
+    filename = f"cache_{cache_sig}_{len(items)}x{H}x{W}x3.uint8.npy"
+    final_path = os.path.join(cache_dir, filename)
+    
+    if os.path.exists(final_path):
+        return np.memmap(final_path, dtype=np.uint8, mode="r", shape=shape)
+        
+    tmp_path = final_path + ".tmp"
+    if os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+            
+    tmp_memmap = np.memmap(tmp_path, dtype=np.uint8, mode="w+", shape=shape)
+    ds = DRDataset(items, image_size)
+    
+    def load_and_write(idx):
+        tmp_memmap[idx] = ds.load(idx)
+        
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(load_and_write, range(len(items))))
+        
+    tmp_memmap.flush()
+    del tmp_memmap
+    
+    os.replace(tmp_path, final_path)
+    return np.memmap(final_path, dtype=np.uint8, mode="r", shape=shape)
 
 
 def _worker_init(_):
@@ -138,38 +165,45 @@ def _worker_init(_):
 
 
 def make_loaders(cfg, device="cpu", gpu_preprocess=False, which=("train", "val", "test")):
-    """Build DataLoaders for the requested splits.
-
-    gpu_preprocess=True: workers only decode/resize and return uint8; the
-    training loop preprocesses the batch on the GPU (assignment A5).
-    """
-    items = find_images(cfg["data"]["root"])
+    items = find_images(cfg["data"]["root"] )
     if not items:
         raise FileNotFoundError(
+
             f"No images found under {cfg['data']['root']}/<class>/...  "
+
             "Run scripts/prepare_fdr26.py or point data.root at the dataset.")
     splits = split_by_patient(
+
         items, cfg["data"]["train_frac"], cfg["data"]["val_frac"],
+
         cfg["data"].get("split_seed", cfg["seed"]))
     nw = cfg["data"]["num_workers"]
     augment = bool(cfg["preprocess"].get("augment", False))
     loaders = {}
     for k in which:
-        # augmentation is for the training split only
         tf = None if gpu_preprocess else get_preprocess_transform(cfg, augment and k == "train")
-        # TODO(A3.3): if cfg["data"].get("cache_dir") is set, call build_cache for
-        #             this split and pass the result to DRDataset(cache=...).
+        cache = None
+        if cfg["data"].get("cache_dir"):
+            cache = build_cache(splits[k], cfg["data"]["image_size"], cfg["data"]["cache_dir"])
         ds = DRDataset(splits[k], cfg["data"]["image_size"], transform=tf,
-                       raw_uint8=gpu_preprocess)
-        # TODO(A5.1): add the DataLoader options that feed a GPU efficiently:
-        #   pin_memory (only when device == "cuda"), persistent_workers (when nw > 0),
-        #   prefetch_factor (cfg["data"].get("prefetch_factor", 2), only valid when nw > 0),
-        #   worker_init_fn=_worker_init (when nw > 0).
-        loaders[k] = DataLoader(
-            ds,
+
+                       raw_uint8=gpu_preprocess, cache=cache)
+        kw = dict(
+
             batch_size=cfg["data"]["batch_size"],
+
             shuffle=(k == "train"),
+
             num_workers=nw,
+
             drop_last=(k == "train"),
+
         )
+        if device == "cuda":
+            kw["pin_memory"] = True
+        if nw > 0:
+            kw["persistent_workers"] = True
+            kw["prefetch_factor"] = cfg["data"].get("prefetch_factor", 2)
+            kw["worker_init_fn"] = _worker_init
+        loaders[k] = DataLoader(ds, **kw)
     return loaders, splits
