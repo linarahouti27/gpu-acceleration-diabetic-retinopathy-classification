@@ -22,6 +22,57 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 ## Entries
 
+### A3.7 Cache checkpoint questions          date: 2026-11-13
+
+Config / commit:      configs/exp_cache.yaml @ 924f019
+Question:             When does a cache lose? Why must the file name depend on the
+                      image list and the size? Is the cache a CPU or GPU
+                      optimization, or both?
+Prediction:           Cache wins when the dataset fits in RAM and is decoded
+                      every epoch; loses when the dataset is too large, when
+                      augmentation must happen before resize, or when the image
+                      list changes often. File name must hash paths + size to
+                      avoid serving a stale array. Cache benefits both CPU
+                      (decode) and GPU (4x smaller PCIe payload).
+Command:              (analysis-only checkpoint; no command. Cache code:
+                      build_cache in src/data_loader.py, see commits a53a4a8
+                      and the A3.3+A5.1 commit on p2-loading.)
+Result:               Q1: a cache loses when (a) the dataset does not fit in
+                      RAM/disk (e.g. 300k images on a small SSD), (b) augmentation
+                      must be applied before resize (you cache unaugmented
+                      images but pay the augment cost every epoch anyway), or
+                      (c) the image list changes often (each change invalidates
+                      the md5 hash and forces a full rebuild).
+                      Q2: the file name must depend on the image list and the
+                      size so a stale cache is never reused. If image_size
+                      changed 224->256, or images were added/removed, the old
+                      uint8 array would have the wrong shape or wrong content.
+                      The md5 over the paths plus the WxH suffix forces a
+                      rebuild exactly when inputs change.
+                      Q3: both. The cache removes CPU decode work (CPU win) and
+                      lets workers return raw uint8 that the GPU preprocesses,
+                      shrinking the host-to-device copy 4x versus shipping
+                      float32. The GPU path still needs the uint8 pixels, and
+                      reading them from a memmap is far cheaper than re-decoding
+                      JPEGs every epoch.
+Prediction vs result: matches prediction. The cache is a win for our FDR26
+                      size (3000 images, 451 MB cache) and our pipeline (uint8
+                      feeds A5.3 GPU preprocessing).
+Explanation:          build_cache writes a memmap of shape (N, H, W, 3) uint8
+                      named cache_<md5>_<N>x<H>x<W>x3.uint8. The md5 covers
+                      "\n".join(paths) + "|WxH", so any path or size change
+                      produces a different filename and the fast path
+                      `if os.path.exists(path)` is not taken, forcing a rebuild.
+                      test_cache_matches_direct_decode (8/8 passing on p2-loading)
+                      confirms cache[i] == DRDataset.load(i) for every i, so the
+                      two decode paths agree byte-for-byte. The 4x PCIe reduction
+                      (uint8 vs float32) is the algorithmic reason the cache
+                      also helps the GPU path; see A5.10 for the byte count.
+Decision:             keep the cache. P1 to run A3.5 on the 3050 (no-cache vs
+                      first-run vs warm vs cold-OS); numbers go to
+                      results/a3_cache_benchmark.csv for the A8 figures. Move
+                      on to A5.2 (CudaPrefetcher).
+
 (add yours below)
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09

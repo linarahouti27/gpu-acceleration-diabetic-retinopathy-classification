@@ -28,9 +28,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 
 ## A3. Loading redesign: decoded-image cache
 
-- TODO(A3.4) Make `tests/test_data_pipeline.py` pass.
 - TODO(A3.5) Predict, then measure loading without cache, with a first-run cache build, and with a warm cache. Report the cache size in MB.
-- TODO(A3.7) Answer the A3 checkpoint questions.
 
 ## A4. GPU image processing
 
