@@ -70,24 +70,31 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
   - **The gap depends on the hardware:** it is bigger on the laptop (4× vs 2×) because its CPU is faster (newer, 8 cores / 12 threads that OpenCV can use, vs 2 shared cores on Colab: 0.68 vs 1.10 ms at batch 128) and its GPU slower (the RTX 3050 Laptop has 20 SMs vs 40 for the T4, so about half as many threads at once: 2.91 vs 2.45 ms).
 - **Decision:** do not use this GPU median filter as is (it is not used in training anyway). To make it faster, fuse the steps into one custom kernel (Numba CUDA, A4.11): each thread reads its 25 neighbours directly and sorts them in registers, which removes the 25× copy. Tuning blocks / threads per block is a secondary improvement. Since the CPU–GPU balance depends on the machine, a speed-up measured on one machine cannot be generalized to another: the official comparison is the laptop's.
 
-### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10
+### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
 
-- **Config / commit:** none (script defaults); `benchmarks/h2d_copy.py` at commit `a59a759`.
+- **Config / commit:** none (script defaults). Official run: `benchmarks/h2d_copy.py` at commit `a59a759` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/h2d_copy.csv`). Colab draft: same commit; its CSV was not committed, numbers below copied from the console output.
 - **Question:** how long does copying one batch of images from CPU memory to the GPU take as uint8 vs as float32? (The second part, how much of the GPU preprocessing time is the copy, needs P3's `preprocess_batch_gpu`.)
 - **Prediction:** uint8 should be about 4× faster to copy, because it has 4× fewer bytes to move (1 byte per value instead of 4).
 - **Command:** `python benchmarks/h2d_copy.py` (batch sizes 1 8 32 128, 10 repeats, 2 warm-up runs, CUDA synchronized; pinning is done before timing, only the copy is timed).
-- **Result:** DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). Copy time in ms; bandwidth for large batches about 4.6 GB/s (normal) vs about 12 GB/s (pinned).
+- **Result:**
+  - **Official (P1, RTX 3050 Laptop 6 GB), copy time in ms:**
 
   | Batch | uint8, normal | float32, normal | Ratio | uint8, pinned | float32, pinned | Ratio |
   |---|---|---|---|---|---|---|
-  | 1 | 0.083 | 0.214 | 2.6× | 0.041 | 0.079 | 1.9× |
-  | 8 | 0.381 | 1.102 | 2.9× | 0.133 | 0.443 | 3.3× |
-  | 32 | 1.185 | 4.090 | 3.5× | 0.427 | 1.629 | 3.8× |
-  | 128 | 4.145 | 16.959 | 4.1× | 1.632 | 6.328 | 3.9× |
+  | 1 | 0.054 | 0.132 | 2.4× | 0.042 | 0.136 | 3.2× |
+  | 8 | 0.332 | 1.064 | 3.2× | 0.203 | 0.549 | 2.7× |
+  | 32 | 0.754 | 3.798 | 5.0× | 0.556 | 2.001 | 3.6× |
+  | 128 | 3.399 | 17.313 | 5.1× | 2.062 | 8.700 | 4.2× |
 
-- **Prediction vs result:** uint8 is faster than float32 at every batch size. The predicted 4× holds for large batches (3.9–4.1× at 128), but not for small ones (1.9–2.6× at batch 1): every copy has a fixed start-up cost that dominates when the batch is tiny.
-- **Explanation:** the copy time depends on the number of bytes, not on the type: uint8 at batch 128 and float32 at batch 32 are both 19.27 MB and take the same time (4.15 vs 4.09 ms normal, 1.63 vs 1.63 ms pinned). Pinned memory is about 2.6× faster for both types because the driver does not need an extra copy into a fixed staging area first; at about 12 GB/s it is close to the PCIe limit of the T4.
-- **Decision:** copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design): about 10× faster than copying float32 from normal memory (batch 32: 4.09 → 0.43 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap, especially if the pinned buffer is reused instead of allocated for every batch (PyTorch's `pin_memory` already caches pinned blocks). Keep it in perspective: at batch 32 this saves about 3.7 ms per batch, about 0.25 s per epoch; compare with the epoch time from P1's profiling (Amdahl). Next: the second part of A4.14 needs P3's `preprocess_batch_gpu`; re-run on P1's RTX 3050.
+  Bandwidth for large batches: about 4.5–6.4 GB/s (normal) vs about 9.4 GB/s (pinned).
+  - **Draft (Colab, Tesla T4), copy time in ms:** uint8 normal 0.083 / 0.381 / 1.185 / 4.145; float32 normal 0.214 / 1.102 / 4.090 / 16.959; uint8 pinned 0.041 / 0.133 / 0.427 / 1.632; float32 pinned 0.079 / 0.443 / 1.629 / 6.328 (batch 1 / 8 / 32 / 128). Bandwidth for large batches about 4.6 GB/s (normal) vs about 12 GB/s (pinned).
+  - **Batch 32, float32 normal → uint8 pinned:** 3.80 → 0.56 ms (6.8×) on the laptop; 4.09 → 0.43 ms (9.5×) on Colab.
+- **Prediction vs result:** uint8 is faster than float32 at every batch size, on both machines. The predicted 4× holds for large batches (3.6–5.1× at 32–128 on the laptop, 3.9–4.1× at 128 on Colab), but not for small ones (2–3× at batch 1): every copy has a fixed start-up cost that dominates when the batch is tiny.
+- **Explanation:**
+  - **The copy time depends on the number of bytes, not on the type:** on Colab, uint8 at batch 128 and float32 at batch 32 are both 19.27 MB and take the same time (4.15 vs 4.09 ms normal, 1.63 vs 1.63 ms pinned).
+  - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
+  - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
+- **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Next: the second part of A4.14 needs P3's `preprocess_batch_gpu`.
 
 ### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina) — 2026-11-10
 
