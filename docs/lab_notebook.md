@@ -170,3 +170,77 @@ Decision:             The fused kernel is the GPU median filter worth keeping. T
                       not used in training, so this does not speed up the pipeline itself; it shows
                       why kernel fusion matters. Possible next step: a faster sort (e.g. only
                       partially sorting up to the 13th value). Re-run on P1's RTX 3050.
+
+
+
+
+### A1.7 / A1.8 CPU baseline run (P1: Fatima Zahrae)          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit dd9e6c7
+Question:             What are the validation accuracy and the time per epoch of the CPU baseline?
+Prediction:           (none written before the run)
+Command:              python src/train_cpu.py
+Result:               RTX 3050 laptop, CPU i5-13420H, charger plugged in, Best performance.
+                      5 epochs, best val_acc = 0.3859 (val_f1 at the last epoch = 0.3356),
+                      wall time = 564.4 s, about 23 img/s.
+                      train_time per epoch: 93.41, 93.55, 91.72, 90.65, 95.72 s.
+                      Steady epochs (1 to 4): mean 92.9 s +/- 2.2 s. Cold epoch (0): 93.41 s.
+                      setup_time_s = 2.515521000023 s
+Prediction vs result: -
+Explanation:          One-time costs: setup (2.52 s) and the cold first epoch. The first epoch is
+                      not slower than the others (93.41 s vs 92.9 s average), so there is no
+                      visible cold-start cost on CPU. Repeated cost: about 93 s per epoch, paid
+                      at every epoch.
+                      The 5 train_time values add up to 465 s but the wall time is 564 s. Setup
+                      explains only 2.5 s of the 99 s gap. The rest is probably validation after
+                      each epoch (about 19 s per epoch), not confirmed yet.
+Decision:             Keep this run as the baseline everything is compared against. Test set not
+                      used (evaluate.py is for A7).
+
+### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: Fatima Zahrae)   date: 2026-11-12
+Question:             Rank by share of the baseline epoch time: loading, preprocessing (CLAHE, crop,
+                      normalize), forward, backward, optimizer step.
+Prediction:           1) backward  2) forward  3) loading  4) preprocessing  5) optimizer step
+                      Reason: the baseline runs on the CPU at only about 23 img/s (about 43 ms per
+                      image), which is slow, so I think the neural network computation dominates.
+                      The backward pass costs about twice the forward pass (it computes gradients
+                      for every layer), so it should come first. Loading (decoding large retina
+                      images every epoch) and preprocessing (CLAHE) come next, because nothing is
+                      cached yet. The optimizer step only updates the weights once per batch, so
+                      it should be the smallest.
+Command:              python benchmarks/profile_baseline.py
+                      python benchmarks/benchmark_stages.py --n 64
+Result:               Profile of 1 CPU epoch (workers=0 on purpose, cProfile), total 167.7 s:
+                        loading (decode+resize)   106.45 s   63.5 %
+                        backward                   29.60 s   17.6 %
+                        forward                    24.30 s   14.5 %
+                        preprocessing (total)       5.64 s    3.4 %  (CLAHE 3.01, crop 1.12, normalize 1.37)
+                        optimizer step              0.26 s    0.2 %
+                        other                       1.48 s    0.9 %
+                      Per-stage timing on 64 images (benchmark_stages.py, mean +/- std):
+                        loading         2490.8 +/- 290.2 ms  (25.7 img/s)
+                        preprocessing    214.7 +/-  17.6 ms
+                        train_step      1631.3 +/- 167.6 ms  (39.2 img/s)
+                        inference        413.4 +/-   9.7 ms
+Prediction vs result: Predicted: backward > forward > loading > preprocessing > optimizer.
+                      Measured: loading > backward > forward > preprocessing > optimizer.
+                      Right: preprocessing 4th, optimizer last, backward above forward.
+                      Wrong: loading. I put it 3rd, but it is 1st with 63.5 %, about twice
+                      forward + backward together (32.1 %).
+Explanation:          Loading decodes and resizes large retina images from disk, and the same
+                      images are decoded again at every epoch. It costs about 39 ms per image
+                      (benchmark) against about 25 ms per image for forward + backward
+                      (train_step). Consistency check: forward + backward in the profile is
+                      53.9 s for 2116 images = 25.5 ms per image, the same as the train_step
+                      benchmark (1631 ms / 64 = 25.5 ms). Preprocessing is small (CLAHE only
+                      3.0 s) and the optimizer step is tiny (it updates the weights once per
+                      batch). The profile epoch is slower (15 img/s) than the baseline run
+                      (23 img/s) because it uses no worker processes, so loading is not
+                      overlapped with compute, and cProfile adds some overhead. The shares
+                      above are for this serial version.
+                      Amdahl bound: loading p = 0.635 gives 1 / (1 - 0.635) = 2.74x at best.
+                      Backward p = 0.176 gives 1 / (1 - 0.176) = 1.21x at best.
+Decision:             Loading is the first target: build the decoded-image cache (A3). Even
+                      with free loading the end-to-end gain is at most 2.74x. Forward + backward
+                      (32 %, at best 1.47x alone) come second, with the GPU. Preprocessing
+                      (3.4 %, at best 1.04x) is not worth optimizing first. Re-profile after
+                      each change, because the shares will move.

@@ -1,0 +1,24 @@
+{
+  "os": "Windows-11-10.0.26300-SP0",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-13420H",
+  "cpu_physical_cores": 8,
+  "cpu_logical_threads": 12,
+  "ram_gb": 8,
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+    "vram_gb": 6.4,
+    "compute_capability": "8.6",
+    "sm_count": 20,
+    "driver": "617.42"
+  },
+  "python": "3.12.10",
+  "torch": "2.11.0+cu128",
+  "cuda": "12.8",
+  "cudnn": 91900,
+  "torchvision": "0.26.0+cu128",
+  "numpy": "2.5.4",
+  "opencv": "5.0.0",
+  "scikit_learn": "1.9.1",
+  "pillow": "13.0.0",
+  "torch_cpu_threads": 8
+}
