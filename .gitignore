@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+data/
+gpua_backup/
+checkpoints/
+.ipynb_checkpoints/
