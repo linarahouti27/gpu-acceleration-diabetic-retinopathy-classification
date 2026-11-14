@@ -22,6 +22,7 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 ## Entries
 
+<<<<<<< HEAD
 ### A5.9 Precomputed preprocessing vs on-the-fly GPU preprocessing          date: 2026-11-13
 
 Config / commit:      configs/optimized.yaml @ 0a084f8
@@ -151,6 +152,8 @@ Explanation:          A5.1's pin_memory=True is the precondition for A5.4's
 Decision:             A5 done. Hand results/timing.csv and results/sweep_workers.csv
                       to the A8 figures script.
 
+=======
+>>>>>>> 1a013c502c984dd85f011008f4786f7d3734d728
 ### A3.7 Cache checkpoint questions          date: 2026-11-13
 
 Config / commit:      configs/exp_cache.yaml @ 924f019
