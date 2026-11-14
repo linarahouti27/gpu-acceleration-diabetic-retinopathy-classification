@@ -1,0 +1,28 @@
+# A6.8 / A6.9 experiment: exp_baseline_seed43
+# Compared with: baseline
+# One change:    seed: 42 -> 43 (split_seed stays 42)
+# Hypothesis:    Control: same settings, different random seed. Measures the run-to-run variation, to judge
+#   whether the other differences are real or luck.
+# Same splits (split_seed 42) and training budget (5 epochs) as every other experiment.
+seed: 43
+data:
+  split_seed: 42          # fixed in every experiment: identical train/val/test images
+  root: data/dr_dataset
+  image_size: [224, 224]
+  num_classes: 5
+  train_frac: 0.70
+  val_frac: 0.15
+  batch_size: 32
+  num_workers: 2
+preprocess:
+  clahe: true
+  circular_crop: true
+  normalize: true
+  gamma: 1.0
+train:
+  model: reference_cnn
+  epochs: 5
+  lr: 0.001
+  amp: false
+  weight_decay: 0.0
+  label_smoothing: 0.0
