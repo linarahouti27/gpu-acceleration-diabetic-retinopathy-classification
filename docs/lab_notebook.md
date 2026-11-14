@@ -565,3 +565,45 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
   - **P2's work should help the most:** the decoded-image cache (A3) removes the repeated decoding, the main cost.
   - **For the copy:** copy uint8 batches from pinned memory, as A4.14 showed: pinned memory is P2's DataLoader option (A5.1), and copying uint8 needs P3's GPU preprocessing plugged in by P2's hook (A5.3).
   - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
+
+### A6.1, A6.2, A6.3 Mixed precision (AMP), channels_last, and torch.compile (P3: Inès)   date: 2026-11-14
+Question:             How much training speedup and VRAM reduction do AMP (`torch.autocast` +
+                      `GradScaler`), `channels_last` memory format, and `torch.compile` bring on
+                      `reference_cnn`, and does `channels_last` help in both FP32 and FP16?
+Prediction:           AMP should cut peak activation memory roughly in half and speed up training
+                      via FP16 Tensor Cores. `channels_last` (NHWC) should primarily help when
+                      combined with AMP because NVIDIA Tensor Cores natively require NHWC layout,
+                      whereas in FP32 it may bring no gain or slightly slow down cuDNN kernels.
+                      `torch.compile` should slightly improve steady-state epoch time and reduce
+                      VRAM via kernel fusion, at the cost of a large first-epoch (cold) compilation
+                      overhead on Linux.
+Command:              Controlled micro-benchmark via `run_epoch` on 512 images (16 batches of 32,
+                      3x224x224, `reference_cnn`, 1 cold epoch + 3 steady epochs, CUDA synchronized
+                      via `GpuTimer`).
+Result:               Measured on Google Colab, Tesla T4:
+                        Configuration                Cold epoch (ms)   Steady epoch ± std (ms)   Speedup   Peak VRAM (MB)
+                        1. FP32 + NCHW (baseline)         3943.9             855.5 ±  3.7         1.00x        870.4
+                        2. FP32 + channels_last           1033.7             944.5 ±  4.6         0.91x        878.0
+                        3. AMP  + NCHW                    1114.9             626.0 ±  2.8         1.37x        474.9
+                        4. AMP  + channels_last            522.4             487.6 ±  3.2         1.75x        467.8
+                        5. AMP  + CL + torch.compile     26661.8             477.4 ± 33.0         1.79x        400.0
+Prediction vs result: Matches the prediction. In FP32, enabling `channels_last` alone actually
+                      slows training down by ~10% (944.5 ms vs 855.5 ms), confirming that one must
+                      measure rather than assume it helps. However, once AMP is enabled, adding
+                      `channels_last` drops steady-state time from 626.0 ms to 487.6 ms (1.75x
+                      total speedup over baseline) and cuts peak VRAM by 46% (870.4 MB -> 467.8 MB).
+                      Adding `torch.compile` lowers peak VRAM further to 400.0 MB and reaches
+                      477.4 ms steady-state, but incurs a 26.66 s cold-epoch compilation cost.
+Explanation:          On Turing GPUs (Tesla T4 / RTX 3050), FP16 Tensor Core convolutions operate
+                      natively on NHWC (`channels_last`) tensors; keeping NCHW with AMP forces
+                      cuDNN to insert layout transposition kernels around convolutions. In FP32,
+                      standard CUDA cores prefer NCHW, so NHWC adds overhead without Tensor Core
+                      benefits. Finally, `torch.compile` fuses pointwise/BatchNorm/ReLU ops via
+                      Triton, saving 68 MB of activation memory and ~10 ms per epoch, but compiling
+                      Triton kernels on the first epoch takes ~26.1 s (and Triton is unsupported on
+                      Windows).
+Decision:             Enable `amp: true` and `channels_last: true` in `configs/optimized.yaml`.
+                      Keep `compile: false` by default because the 26.7 s cold-epoch overhead is
+                      not amortized over short training runs and P1's official benchmark machine
+                      runs Windows (where `src/train.py` automatically skips `torch.compile`).
+
