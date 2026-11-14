@@ -22,6 +22,186 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 
 ## Entries
 
+### A5.9 Precomputed preprocessing vs on-the-fly GPU preprocessing          date: 2026-11-13
+
+Config / commit:      configs/optimized.yaml @ 0a084f8
+Question:             Is it faster to (a) store the final preprocessed float
+                      tensors on disk, or (b) compute them on the GPU every epoch?
+Prediction:           on-the-fly GPU preprocessing wins; the uint8 cache (A3) is
+                      4x smaller than float32 on disk, and GPU CLAHE/normalize
+                      costs ~ms per batch (see results/timing.csv preprocessing
+                      gpu row).
+Command:              (analysis; backed by results/timing.csv preprocessing row
+                      and the A3 cache file size from `ls -lh data/cache/`)
+Result:               Storage: 3000 images x 3 x 224 x 224 x 4 bytes (float32) =
+                      1.81 GB on disk for precomputed float tensors; the uint8
+                      cache from A3 is 3000 x 224 x 224 x 3 = 451 MB (4x smaller).
+                      Memory: a precomputed pipeline still loads each batch from
+                      disk into RAM then copies to the GPU; the on-the-fly GPU
+                      pipeline loads uint8 (4x less host memory pressure per
+                      batch) and the GPU does CLAHE/normalize in milliseconds
+                      (see results/timing.csv preprocessing gpu row).
+                      Augmentation: precomputed augmented copies multiply
+                      storage by the number of augmentations and lose randomness;
+                      on-the-fly GPU augmentation (preprocess_gpu.augment_gpu) is
+                      fresh every epoch and costs almost nothing on the GPU.
+                      The brief's Module D asks exactly this — random augmentation
+                      must be on the fly.
+Prediction vs result: matches prediction. GPU preprocessing per batch (~ms) is
+                      much smaller than the disk read of an equivalent float32
+                      batch; the 4x storage and PCIe reduction makes the uint8
+                      cache + on-the-fly GPU preprocessing the right choice.
+Explanation:          results/timing.csv shows the GPU preprocessing row is in
+                      milliseconds per batch; the A3 cache file size (451 MB)
+                      is 4x smaller than the precomputed float32 size (1.81 GB).
+                      Plus precomputed augmentation loses randomness, violating
+                      Module D's "random augmentation on the fly" rule.
+Decision:             keep the uint8 cache (A3), do preprocessing + augmentation
+                      on the GPU every epoch. Precomputed float tensors are only
+                      worth it if GPU preprocessing time per batch is larger than
+                      the disk read of the float tensors — the timing.csv numbers
+                      show that is not the case here.
+
+### A5.10 Bytes over PCIe per epoch          date: 2026-11-13
+
+Config / commit:      configs/baseline.yaml @ 0a084f8
+Question:             How many bytes cross the PCIe bus per training epoch for
+                      CPU preprocessing vs GPU preprocessing?
+Prediction:           CPU preprocessing: each batch crosses PCIe as float32 NCHW
+                      (already preprocessed on the host); GPU preprocessing: each
+                      batch crosses PCIe as uint8 NCHW (4x smaller). With
+                      2116 train images and batch 32, expect ~66
+                      batches, ~1.27 GB/epoch for CPU path and
+                      ~0.32 GB/epoch for GPU path.
+Command:              python -c "
+                      import yaml
+                      cfg = yaml.safe_load(open('configs/baseline.yaml'))
+                      from src.data_loader import find_images, split_by_patient
+                      s = split_by_patient(find_images(cfg['data']['root']),
+                          cfg['data']['train_frac'], cfg['data']['val_frac'], cfg['seed'])
+                      n_train = len(s['train']); bs = cfg['data']['batch_size']
+                      batches = n_train // bs
+                      H = W = 224
+                      cpu_bytes = batches * bs * 3 * H * W * 4
+                      gpu_bytes = batches * bs * 3 * H * W * 1
+                      print(f'train images: {n_train}, batches: {batches}')
+                      print(f'CPU preprocessing: {cpu_bytes/1e9:.2f} GB/epoch over PCIe')
+                      print(f'GPU preprocessing: {gpu_bytes/1e9:.2f} GB/epoch over PCIe (4x less)')
+                      "
+Result:               train images: 2116, batches: 66.
+                      CPU preprocessing: 1.27 GB/epoch over PCIe.
+                      GPU preprocessing: 0.32 GB/epoch over PCIe (4x less).
+Prediction vs result: matches prediction exactly. The 4x reduction comes from
+                      shipping uint8 (1 byte per channel) instead of float32
+                      (4 bytes per channel) over the same N x C x H x W layout.
+Explanation:          With 2116 training images and batch 32, there are
+                      66 batches (drop_last=True). CPU path:
+                      66 x 32 x 3 x 224 x 224 x 4 bytes = 1.27 GB/epoch.
+                      GPU path: 66 x 32 x 3 x 224 x 224 x 1 byte = 0.32 GB/epoch.
+                      The 4x reduction is the algorithmic reason GPU preprocessing
+                      relieves the PCIe bus, on top of removing CPU decode/preprocess work.
+Decision:             keep GPU preprocessing (uint8 over PCIe). The 4x PCIe
+                      reduction compounds with the CPU decode savings from A3 and
+                      the GPU compute offload from A4.
+
+### A5.11 Checkpoint questions          date: 2026-11-13
+
+Config / commit:      configs/optimized.yaml @ 0a084f8
+Question:             (Q1) Why does non_blocking=True do nothing useful for a
+                      tensor in pageable memory? (Q2) You doubled num_workers
+                      and nothing changed — three possible reasons and one
+                      measurement each. (Q3) Why is Windows different from Linux
+                      for DataLoader workers, and what does that change?
+Prediction:           (Q1) PyTorch must synchronously stage pageable data into a
+                      pinned buffer before the async DMA can run, so the transfer
+                      cannot overlap with compute. (Q2) The bottleneck moved to
+                      the GPU, or the disk, or the CPU core count. (Q3) Windows
+                      uses spawn; Linux can fork.
+Command:              (analysis-only checkpoint; backed by results/timing.csv,
+                      results/sweep_workers.csv, and the assignment brief)
+Result:               Q1: non_blocking=True only earns its keep when the source
+                      is pinned (page-locked) host memory. For a tensor in
+                      pageable memory, PyTorch must first synchronously stage it
+                      into a pinned buffer before the async DMA can run, so the
+                      transfer cannot overlap with compute. The flag effectively
+                      degrades to a blocking copy. That is why A5.1 sets
+                      pin_memory=True on CUDA.
+                      Q2: three possible reasons and one measurement each:
+                      (a) The bottleneck is now the GPU, not the host — measure
+                      GPU utilization with nvidia-smi / resources.csv; if the
+                      GPU is already >90%, more workers cannot help.
+                      (b) The disk is the limit (cache off, cold OS cache) —
+                      measure loading ms from results/timing.csv with cache on
+                      vs off.
+                      (c) You hit the CPU core count (Colab gives ~2-4 cores) —
+                      measure cpu_percent in resources.csv; if it is pinned
+                      at 100%, more workers just thrash.
+                      Q3: Windows uses spawn (fresh process, state re-imported)
+                      while Linux can fork. spawn requires every transform and
+                      dataset to be picklable — no lambdas, no closures. That is
+                      why CpuTransform is a class, not a lambda, and why
+                      make_gpu_pre's lambda is fine (it lives in the main
+                      process, never in a worker).
+Prediction vs result: matches prediction.
+Explanation:          A5.1's pin_memory=True is the precondition for A5.4's
+                      non_blocking=True to actually overlap; without pinned
+                      memory, non_blocking does nothing useful. The worker sweep
+                      (results/sweep_workers.csv) is the empirical version of
+                      Q2: the curve flattens at the GPU-saturating worker count.
+Decision:             A5 done. Hand results/timing.csv and results/sweep_workers.csv
+                      to the A8 figures script.
+
+### A3.7 Cache checkpoint questions          date: 2026-11-13
+
+Config / commit:      configs/exp_cache.yaml @ 924f019
+Question:             When does a cache lose? Why must the file name depend on the
+                      image list and the size? Is the cache a CPU or GPU
+                      optimization, or both?
+Prediction:           Cache wins when the dataset fits in RAM and is decoded
+                      every epoch; loses when the dataset is too large, when
+                      augmentation must happen before resize, or when the image
+                      list changes often. File name must hash paths + size to
+                      avoid serving a stale array. Cache benefits both CPU
+                      (decode) and GPU (4x smaller PCIe payload).
+Command:              (analysis-only checkpoint; no command. Cache code:
+                      build_cache in src/data_loader.py, see commits a53a4a8
+                      and the A3.3+A5.1 commit on p2-loading.)
+Result:               Q1: a cache loses when (a) the dataset does not fit in
+                      RAM/disk (e.g. 300k images on a small SSD), (b) augmentation
+                      must be applied before resize (you cache unaugmented
+                      images but pay the augment cost every epoch anyway), or
+                      (c) the image list changes often (each change invalidates
+                      the md5 hash and forces a full rebuild).
+                      Q2: the file name must depend on the image list and the
+                      size so a stale cache is never reused. If image_size
+                      changed 224->256, or images were added/removed, the old
+                      uint8 array would have the wrong shape or wrong content.
+                      The md5 over the paths plus the WxH suffix forces a
+                      rebuild exactly when inputs change.
+                      Q3: both. The cache removes CPU decode work (CPU win) and
+                      lets workers return raw uint8 that the GPU preprocesses,
+                      shrinking the host-to-device copy 4x versus shipping
+                      float32. The GPU path still needs the uint8 pixels, and
+                      reading them from a memmap is far cheaper than re-decoding
+                      JPEGs every epoch.
+Prediction vs result: matches prediction. The cache is a win for our FDR26
+                      size (3000 images, 451 MB cache) and our pipeline (uint8
+                      feeds A5.3 GPU preprocessing).
+Explanation:          build_cache writes a memmap of shape (N, H, W, 3) uint8
+                      named cache_<md5>_<N>x<H>x<W>x3.uint8. The md5 covers
+                      "\n".join(paths) + "|WxH", so any path or size change
+                      produces a different filename and the fast path
+                      `if os.path.exists(path)` is not taken, forcing a rebuild.
+                      test_cache_matches_direct_decode (8/8 passing on p2-loading)
+                      confirms cache[i] == DRDataset.load(i) for every i, so the
+                      two decode paths agree byte-for-byte. The 4x PCIe reduction
+                      (uint8 vs float32) is the algorithmic reason the cache
+                      also helps the GPU path; see A5.10 for the byte count.
+Decision:             keep the cache. P1 to run A3.5 on the 3050 (no-cache vs
+                      first-run vs warm vs cold-OS); numbers go to
+                      results/a3_cache_benchmark.csv for the A8 figures. Move
+                      on to A5.2 (CudaPrefetcher).
+
 (add yours below)
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09

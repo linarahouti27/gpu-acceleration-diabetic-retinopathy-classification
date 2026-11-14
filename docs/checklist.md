@@ -28,9 +28,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 
 ## A3. Loading redesign: decoded-image cache
 
-- TODO(A3.4) Make `tests/test_data_pipeline.py` pass.
 - TODO(A3.5) Predict, then measure loading without cache, with a first-run cache build, and with a warm cache. Report the cache size in MB.
-- TODO(A3.7) Answer the A3 checkpoint questions.
 
 ## A4. GPU image processing
 
@@ -42,9 +40,6 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 
 ## A5. End-to-end input pipeline
 
-- TODO(A5.9) Compare precomputed preprocessing with on-the-fly GPU preprocessing in storage and memory, and decide with numbers.
-- TODO(A5.10) Compute the bytes per epoch that cross PCIe with CPU preprocessing and with GPU preprocessing.
-- TODO(A5.11) Answer the A5 checkpoint questions.
 
 ## A6. Training acceleration and model redesign
 
