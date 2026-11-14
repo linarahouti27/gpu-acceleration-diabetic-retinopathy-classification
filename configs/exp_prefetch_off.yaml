@@ -1,0 +1,25 @@
+data:
+  batch_size: 32
+  cache_dir: data/cache
+  image_size:
+  - 224
+  - 224
+  num_classes: 5
+  num_workers: 2
+  prefetch_gpu: false
+  root: data/dr_dataset
+  train_frac: 0.7
+  val_frac: 0.15
+preprocess:
+  circular_crop: true
+  clahe: true
+  gamma: 1.0
+  normalize: true
+seed: 42
+train:
+  amp: false
+  epochs: 2
+  label_smoothing: 0.0
+  lr: 0.001
+  model: reference_cnn
+  weight_decay: 0.0
