@@ -21,10 +21,13 @@ def macro_f1(conf):
     return (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean().item()
 
 
-def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
+def run_epoch(model, loader, criterion, device, optimizer=None, conf=None, gpu_pre=None):
     """One pass over `loader`. Returns (mean loss, accuracy, n_images).
     If `conf` (a (C, C) long tensor on `device`) is given, it is updated in place with the
     confusion matrix, so the caller can compute macro-F1 with `macro_f1`.
+
+    gpu_pre: optional callable(uint8 batch) -> preprocessed NCHW tensor on `device`;
+        when given, it replaces x.to(device).
 
     TODO(A6.1): add mixed precision. New parameters: scaler, amp.
         Wrap the forward pass and the loss in torch.autocast(device.type, enabled=amp)
@@ -32,10 +35,6 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
         (scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()).
     TODO(A6.2): add `channels_last` (convert the input batch with
         x.contiguous(memory_format=torch.channels_last)).
-    TODO(A5.3): add `gpu_pre`, a callable(uint8 batch) -> preprocessed NCHW tensor on
-        `device`. When it is given, use it instead of x.to(device).
-    TODO(A5.4): make host-device copies asynchronous: x.to(device, non_blocking=True).
-        Then explain in the report why this only helps with pinned memory.
     """
     train = optimizer is not None
     model.train() if train else model.eval()
@@ -53,9 +52,19 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
         # Their values are retrieved using .item() only after the loop.
         # Calling loss.item() inside the loop would force GPU synchronization per batch.
         # This would make the CPU wait and reduce overlap with the next batch's data transfer.
+        # A2.2: loss_sum and correct stay on the GPU as tensors, so the host never
+        # waits inside the loop. The line that would sync on EVERY batch if
+        # rewritten is `loss_sum += loss.detach().float() * x.size(0)`: with
+        # `loss.item() * ...` (or .cpu(), float(loss), print(loss)) the CPU would
+        # block until all queued CUDA work finishes, which kills the overlap with
+        # the next batch's copy. `total += x.size(0)` is safe: size() is host-side
+        # metadata. The only .item() calls are after the loop: one wait per epoch.
         for x, y in loader:
-            y = y.to(device)
-            x = x.to(device)
+            y = y.to(device, non_blocking=True)
+            if gpu_pre is not None:
+                x = gpu_pre(x)  # uint8 host batch -> preprocessed NCHW on device
+            else:
+                x = x.to(device, non_blocking=True)
             logits = model(x)
             loss = criterion(logits, y)
             if train:
@@ -73,18 +82,16 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
 
 
 def resolve_gpu_preprocess(cfg, device, override=None):
-    """TODO(A5.3): return True when GPU preprocessing should be used: the config flag
-    cfg["preprocess"]["gpu"] (or `override` when it is not None) AND device.type == "cuda".
-    """
-    return False
+    """True when GPU preprocessing is requested (config flag or override) and the device is CUDA."""
+    flag = override if override is not None else cfg["preprocess"].get("gpu", False)
+    return bool(flag) and device.type == "cuda"
 
 
 def make_gpu_pre(cfg, device, augment):
-    """TODO(A5.3): return a callable(batch) -> preprocessed tensor on `device`, built on
-    src.preprocess_gpu.preprocess_batch_gpu with the given `augment` flag.
-    (A lambda is fine here: it is used in the main process, not in DataLoader workers.)
-    """
-    raise NotImplementedError("TODO(A5.3): make_gpu_pre")
+    """Return a callable(uint8 batch) -> preprocessed NCHW tensor on `device`.
+    A lambda is fine: it is used in the main process, not in DataLoader workers."""
+    from src.preprocess_gpu import preprocess_batch_gpu
+    return lambda batch: preprocess_batch_gpu(batch, cfg, augment=augment, device=device)
 
 
 def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
@@ -98,6 +105,8 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     device = torch.device(device_str)
     gpu_pre_on = resolve_gpu_preprocess(cfg, device, gpu_preprocess)
     augment = bool(cfg["preprocess"].get("augment", False))
+    gpu_pre_train = make_gpu_pre(cfg, device, augment=augment) if gpu_pre_on else None
+    gpu_pre_val = make_gpu_pre(cfg, device, augment=False) if gpu_pre_on else None
     # TODO(A6.1): amp = cfg["train"].get("amp", False) and device.type == "cuda"; create a
     #             torch.amp.GradScaler("cuda", enabled=amp) and pass both to run_epoch.
     # TODO(A6.2): read cfg["train"].get("channels_last", False); convert the model with
@@ -106,12 +115,11 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     #             torch.compile(model) but save the state_dict of the ORIGINAL model so
     #             checkpoint keys stay clean. Record the cold-epoch cost in the report.
     #             torch.compile needs Triton (Linux). On Windows skip it and say so in the report.
-    # TODO(A5.3): when gpu_pre_on, build TWO callables: make_gpu_pre(cfg, device, augment=augment)
-    #             for the train loop and make_gpu_pre(cfg, device, augment=False) for validation.
-    # TODO(A5.5): read cfg["data"].get("prefetch_gpu", False); when true on CUDA, wrap every loader
-    #             in src.prefetcher.CudaPrefetcher(loader, device).
 
     loaders, splits = make_loaders(cfg, device.type, gpu_preprocess=gpu_pre_on, which=("train", "val"))
+    if cfg["data"].get("prefetch_gpu", False) and device.type == "cuda":
+        from src.prefetcher import CudaPrefetcher
+        loaders = {k: CudaPrefetcher(v, device) for k, v in loaders.items()}
     split_sizes = {k: len(v) for k, v in splits.items()}
     print(f"[train:{run}] device={device} gpu_preprocess={gpu_pre_on} "
           f"augment={augment} splits={split_sizes}", flush=True)
