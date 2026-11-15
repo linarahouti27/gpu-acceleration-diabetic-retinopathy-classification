@@ -23,6 +23,57 @@ TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml
 ## Entries
 
 (add yours below)
+Add-Content -Path docs\lab_notebook.md -Value @"
+
+### A1.4 Data split verification (P1: Fatima Zahrae )          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit $commit
+Question:             Are the classes still balanced inside each split? Does any patient
+                      appear in two splits?
+Prediction:           (none written before the run)
+Command:              python check_split.py (the brief's script + an overlap test)
+Result:               split  images  patients   class 0 / 1 / 2 / 3 / 4
+                      train   2116     1342     343 / 489 / 418 / 453 / 413
+                      val      425      287      83 / 104 /  76 /  78 /  84
+                      test     458      289      78 / 108 /  89 / 101 /  82
+                      Shared patients: train & val = 0, train & test = 0, val & test = 0.
+                      Total: 2116 + 425 + 458 = 2999 images, as expected.
+Prediction vs result: -
+Explanation:          Balance: the full dataset is almost balanced (504 / 701 / 583 / 632 / 579).
+                      The share of each class stays close across the three splits (class 1:
+                      23.1% in train, 24.5% in val, 23.6% in test). The largest gaps are class 0
+                      (16.2% in train, 19.5% in val) and class 3 (21.4% in train, 18.4% in val),
+                      probably because val is small (425 images). The splits are comparable.
+                      Data leakage: no patient id is in two splits.
+                      Why patient-level: images of the same patient look alike (same person,
+                      same camera, same anatomy). With an image-level split, near-duplicates
+                      would be in both training and validation. The model could recognize the
+                      patient instead of learning the disease, and the validation accuracy
+                      would be too optimistic. With a patient-level split, it better estimates
+                      the performance on new patients. I did not measure by how much it would
+                      be inflated.
+Decision:             Keep this split for all comparisons (data.split_seed fixed).
+
+### A1.7 / A1.8 CPU baseline run (P1: Fatima Zahrae)          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit dd9e6c7
+Question:             What are the validation accuracy and the time per epoch of the CPU baseline?
+Prediction:           (none written before the run)
+Command:              python src/train_cpu.py
+Result:               RTX 3050 laptop, CPU i5-13420H, charger plugged in, Best performance.
+                      5 epochs, best val_acc = 0.3859 (val_f1 at the last epoch = 0.3356),
+                      wall time = 564.4 s, about 23 img/s.
+                      train_time per epoch: 93.41, 93.55, 91.72, 90.65, 95.72 s.
+                      Steady epochs (1 to 4): mean 92.9 s +/- 2.2 s. Cold epoch (0): 93.41 s.
+                      setup_time_s = 2.515521000023 s
+Prediction vs result: -
+Explanation:          One-time costs: setup (2.52 s) and the cold first epoch. The first epoch is
+                      not slower than the others (93.41 s vs 92.9 s average), so there is no
+                      visible cold-start cost on CPU. Repeated cost: about 93 s per epoch, paid
+                      at every epoch.
+                      The 5 train_time values add up to 465 s but the wall time is 564 s. Setup
+                      explains only 2.5 s of the 99 s gap. The rest is probably validation after
+                      each epoch (about 19 s per epoch), not confirmed yet.
+Decision:             Keep this run as the baseline everything is compared against. Test set not
+                      used (evaluate.py is for A7).
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
 Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
@@ -172,29 +223,6 @@ Decision:             The fused kernel is the GPU median filter worth keeping. T
                       partially sorting up to the 13th value). Re-run on P1's RTX 3050.
 
 
-
-
-### A1.7 / A1.8 CPU baseline run (P1: Fatima Zahrae)          date: 2026-11-12
-Config / commit:      configs/baseline.yaml, commit dd9e6c7
-Question:             What are the validation accuracy and the time per epoch of the CPU baseline?
-Prediction:           (none written before the run)
-Command:              python src/train_cpu.py
-Result:               RTX 3050 laptop, CPU i5-13420H, charger plugged in, Best performance.
-                      5 epochs, best val_acc = 0.3859 (val_f1 at the last epoch = 0.3356),
-                      wall time = 564.4 s, about 23 img/s.
-                      train_time per epoch: 93.41, 93.55, 91.72, 90.65, 95.72 s.
-                      Steady epochs (1 to 4): mean 92.9 s +/- 2.2 s. Cold epoch (0): 93.41 s.
-                      setup_time_s = 2.515521000023 s
-Prediction vs result: -
-Explanation:          One-time costs: setup (2.52 s) and the cold first epoch. The first epoch is
-                      not slower than the others (93.41 s vs 92.9 s average), so there is no
-                      visible cold-start cost on CPU. Repeated cost: about 93 s per epoch, paid
-                      at every epoch.
-                      The 5 train_time values add up to 465 s but the wall time is 564 s. Setup
-                      explains only 2.5 s of the 99 s gap. The rest is probably validation after
-                      each epoch (about 19 s per epoch), not confirmed yet.
-Decision:             Keep this run as the baseline everything is compared against. Test set not
-                      used (evaluate.py is for A7).
 
 ### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: Fatima Zahrae)   date: 2026-11-12
 Question:             Rank by share of the baseline epoch time: loading, preprocessing (CLAHE, crop,
