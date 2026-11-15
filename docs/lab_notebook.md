@@ -21,14 +21,12 @@ Decision:             <keep / drop the change, and what you do next>
 TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml`.
 
 ## Entries
-
-(add yours below)
-Add-Content -Path docs\lab_notebook.md -Value @"
-
 ### A1.4 Data split verification (P1: Fatima Zahrae )          date: 2026-11-12
+
 Config / commit:      configs/baseline.yaml, commit $commit
 Question:             Are the classes still balanced inside each split? Does any patient
                       appear in two splits?
+
 Prediction:           (none written before the run)
 Command:              python check_split.py (the brief's script + an overlap test)
 Result:               split  images  patients   class 0 / 1 / 2 / 3 / 4
@@ -52,7 +50,7 @@ Explanation:          Balance: the full dataset is almost balanced (504 / 701 / 
                       the performance on new patients. I did not measure by how much it would
                       be inflated.
 Decision:             Keep this split for all comparisons (data.split_seed fixed).
-Add-Content -Path docs\lab_notebook.md -Value @"
+
 
 ### A1.5 torch.backends.cudnn.benchmark setting (P1: Fatima zahrae)          date: 2026-11-12
 Config / commit:      configs/baseline.yaml, commit $commit
@@ -101,7 +99,7 @@ Decision:             Keep this run as the baseline everything is compared again
                       used (evaluate.py is for A7).
 Add-Content -Path docs\lab_notebook.md -Value @"
 
-### A1.10 Checkpoint questions (P1: $name)          date: 2026-11-15
+### A1.10 Checkpoint questions (P1: Fatima zahrae)          date: 2026-11-15
 Config / commit:      configs/baseline.yaml, commit $commit
 
 Q1. Which stages run once, and which run every epoch?
