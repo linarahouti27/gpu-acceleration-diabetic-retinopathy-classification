@@ -52,6 +52,31 @@ Explanation:          Balance: the full dataset is almost balanced (504 / 701 / 
                       the performance on new patients. I did not measure by how much it would
                       be inflated.
 Decision:             Keep this split for all comparisons (data.split_seed fixed).
+Add-Content -Path docs\lab_notebook.md -Value @"
+
+### A1.5 torch.backends.cudnn.benchmark setting (P1: Fatima zahrae)          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit $commit
+Question:             How should torch.backends.cudnn.benchmark be set for the baseline and for
+                      the benchmarks, and why?
+Prediction:           (none written before the decision)
+Command:              Select-String -Path src\*.py -Pattern "cudnn"
+Result:               The setting only matters on the GPU: it makes cuDNN try several
+                      convolution algorithms the first time it sees an input shape, then keep the
+                      fastest one.
+Prediction vs result: -
+Explanation:          Baseline (CPU): the baseline runs on the CPU, where cuDNN is not used, so
+                      the flag has no effect. Keep the default (False) so the baseline stays
+                      simple and reproducible.
+                      GPU benchmarks: use True, because the input shape is fixed (224x224, same
+                      batch size). Two precautions: (1) the first pass is slower because the
+                      algorithms are tested, so a warm-up is needed and the cold first epoch is
+                      reported separately; (2) the chosen algorithm can change between runs, so
+                      results are not always identical to the last bit. For correctness tests
+                      (CPU/GPU equivalence) use a tolerance or set it to False.
+                      A different last batch size triggers a new search, which is one more
+                      reason to use drop_last=True on the train loader.
+Decision:             False for the CPU baseline, True for the GPU benchmarks. The same value
+                      must be used in every comparison, and it is written in the config file.
 
 ### A1.7 / A1.8 CPU baseline run (P1: Fatima Zahrae)          date: 2026-11-12
 Config / commit:      configs/baseline.yaml, commit dd9e6c7
@@ -74,6 +99,37 @@ Explanation:          One-time costs: setup (2.52 s) and the cold first epoch. T
                       each epoch (about 19 s per epoch), not confirmed yet.
 Decision:             Keep this run as the baseline everything is compared against. Test set not
                       used (evaluate.py is for A7).
+Add-Content -Path docs\lab_notebook.md -Value @"
+
+### A1.10 Checkpoint questions (P1: $name)          date: 2026-11-15
+Config / commit:      configs/baseline.yaml, commit $commit
+
+Q1. Which stages run once, and which run every epoch?
+  Run once:           listing the images and splitting by patient, building the model and the
+                      loaders. Measured setup_time_s = 2.52 s.
+  Run every epoch:    loading (decode + resize), preprocessing (circular crop, CLAHE,
+                      normalize), forward, backward, optimizer step, and the validation pass
+                      (val_acc is printed after every epoch). Loading is 63.5% of an epoch in
+                      the profile, because the baseline has no cache yet. Augmentation is off
+                      in the baseline (augment=False).
+  In the optimized design: decoding becomes a one-time cost thanks to the decoded-image cache
+  (A3).
+
+Q2. How many bytes does one batch occupy as uint8 and as float32 at 224x224?
+  One image has 224 x 224 x 3 = 150528 values.
+  uint8 (1 byte each):    150528 bytes per image.
+  float32 (4 bytes each): 602112 bytes per image.
+  With batch size $B:     uint8 = $u8 bytes ($u8mb MB), float32 = $f32 bytes ($f32mb MB).
+  float32 is always 4 times larger than uint8, so copying uint8 to the GPU and converting to
+  float32 there moves 4 times fewer bytes. This assumes 3 channels.
+
+Q3. What does drop_last=True on the train loader change in the throughput numbers?
+  With 2116 training images and batch size $B there are $full full batches. drop_last=True
+  removes the last incomplete batch, so $drop images are skipped in an epoch ($pct% of 2116).
+  The effect on images per second is tiny: it is at most about that percentage. All batches
+  have the same shape, which avoids a new cudnn.benchmark search and torch.compile
+  recompilation, and avoids a batch of size 1 for BatchNorm. If the shuffle changes each
+  epoch, the skipped images differ every epoch, so no image is lost for good.
 
 ### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
 Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
