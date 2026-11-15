@@ -280,7 +280,7 @@ Decision:             The fused kernel is the GPU median filter worth keeping. T
 
 
 
-### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: Fatima Zahrae)   date: 2026-11-12
+### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: toutes)   date: 2026-11-12
 Question:             Rank by share of the baseline epoch time: loading, preprocessing (CLAHE, crop,
                       normalize), forward, backward, optimizer step.
 Prediction:           1) backward  2) forward  3) loading  4) preprocessing  5) optimizer step
