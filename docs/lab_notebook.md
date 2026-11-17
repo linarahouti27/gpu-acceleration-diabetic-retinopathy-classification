@@ -84,11 +84,9 @@ Decision:             <keep / drop the change, and what you do next>
 - **Comparison:** A standard profiling tool such as `cProfile` would only indicate that the `apply_clahe` function takes approximately 0.1 seconds overall, without providing details about the execution time of individual operations.
 - **Conclusion:** This profiling demonstrates that accelerating the pipeline on GPU requires more than simply rewriting the CLAHE algorithm. The entire processing pipeline must be reconsidered to avoid costly CPU color space conversions and to take advantage of a fully GPU-based tensor pipeline.
 
-- **Conclusion of Profiling (Average over 7 iterations)**
+**Average over 7 profiling runs**
 
-**Moyenne des 7 exécutions du profilage**
-
-**Temps total moyen :** ~0.002238 s (2 238 337 ns)
+**Average total time:** ~0.002238 s (2,238,337 ns)
 
 | Line # | Hits | Time (ns) | Per Hit (ns) | % Time | Line Contents |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -99,7 +97,7 @@ Decision:             <keep / drop the change, and what you do next>
 | 27 | 1 | 100,700.0 | 100,700.0 | 4.5% | `l, a, b = cv2.split(lab)` |
 | 28 | 1 | 568,260.4 | 568,260.4 | 25.4% | `cl = cv2.createCLAHE(clipLimit=clip, tileGridSize=(grid, grid)).apply(l)` |
 | 29 | 1 | 746,284.0 | 746,284.0 | 33.3% | `out = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)` |
-| 30 | 1 | 149,977.3 | 149,977.3 | 6.7% | `return out.astype(np.float32) / 255.0`
+| 30 | 1 | 149,977.3 | 149,977.3 | 6.7% | `return out.astype(np.float32) / 255.0` |
 
 The average execution time is approximately 2.2 ms per image. The analysis of the execution time distribution shows that the histogram equalization algorithm itself is not the main bottleneck:
 
@@ -109,6 +107,31 @@ The average execution time is approximately 2.2 ms per image. The analysis of th
 **Conclusion:**
 
 The main bottleneck of this CPU function comes from the color space conversions, which together account for approximately 54.8% of the total execution time. To optimize this pipeline on GPU (A4.3), it will be essential to perform CLAHE directly on the reconstructed luminance channel or avoid these expensive color space conversions.
+
+### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina) — 2026-11-10
+
+- **Config / commit:** none (script defaults); `src/filters_numba.py` and `benchmarks/sweep_median.py` at commit `9faff69`.
+- **Question:** A4.13 showed the PyTorch median (pad + `F.unfold` + `torch.median`) is slower than OpenCV at every batch size. Can a second GPU version, a fused custom Numba CUDA kernel, beat OpenCV and the PyTorch version while staying correct?
+- **Prediction:** no prediction was written before the run. Stated after the run: I expected it to be only slightly faster than the CPU, and only at larger batch sizes.
+- **Command:** `python -m pytest tests/test_cpu_gpu_equivalence.py -k numba -v`, then `python benchmarks/sweep_median.py`
+- **Result:**
+  - **Correctness:** `test_median_filter_numba_equivalence` PASSED on Colab T4 (same rule as the PyTorch median test); also 0% of pixels beyond 1 gray level in Numba's CUDA simulator on 20×20 and 23×17 images (23×17 exercises out-of-image threads).
+  - **Speed:** DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050), ms per image:
+
+  | Batch | CPU (OpenCV) | PyTorch (A4.8) | Numba (A4.11) |
+  |---|---|---|---|
+  | 1 | 0.76 | 4.80 | 1.33 |
+  | 8 | 0.80 | 3.79 | 0.51 |
+  | 32 | 0.84 | 2.42 | 0.56 |
+  | 64 | 0.84 | 2.43 | 0.56 |
+  | 128 | 1.00 | 2.44 | 0.55 |
+
+- **Prediction vs result:** better than expected. The Numba kernel beats OpenCV from batch size 8 on (1.5–1.8× faster) and is about 4.4× faster than the PyTorch version from batch 32 on. At batch size 1 the CPU still wins (launch overhead).
+- **Explanation:**
+  - **Implementation** (`src/filters_numba.py`, wrapper `filters_gpu.median_filter_numba`): one thread per output pixel, 16×16 blocks, one grid layer (`blockIdx.z`) per image-channel slice. Each thread reads its 5×5 neighbours with coordinates clamped to the image (= replicate padding), sorts them in a private `cuda.local.array` (insertion sort) and writes the middle value. Window fixed at 5×5.
+  - **Why it is faster:** fusion avoids the 25× memory copy. Each thread reads its neighbours straight into its private array, instead of `F.unfold` writing a 25× larger tensor to GPU memory and `torch.median` reading it back, and there is one kernel launch instead of three. Same GPU and same idea (sort 25 values per pixel), so the gain comes from less memory traffic. The GPU is saturated from batch 8 on (flat curve), earlier than the PyTorch version (batch 32), since there is less work per image. It wins over OpenCV despite using a simple insertion sort.
+- **Decision:** the fused kernel is the GPU median filter worth keeping. The median filter is not used in training, so this does not speed up the pipeline itself; it shows why kernel fusion matters. Possible next step: a faster sort (e.g. only partially sorting up to the 13th value). Re-run on P1's RTX 3050.
+- **Prediction for the official rerun (P1, RTX 3050 laptop, with Numba installed), written before it:** the Numba kernel won't be much faster than the laptop's CPU, maybe about a tie, because the laptop's CPU is newer and has more cores than Colab's (OpenCV: 0.68 vs 1.10 ms at batch 128) while its GPU has half the SMs (the PyTorch median is about 19% slower on it: 2.91 vs 2.45 ms; the same slowdown would put Numba at about 0.65 ms vs OpenCV 0.68 ms).
 
 ### A4.12 Preprocessing test tolerances (P3: Inès)          date: 2026-11-11
 Scope:            the six preprocessing tests in `tests/test_cpu_gpu_equivalence.py` (the filter
@@ -169,12 +192,6 @@ GPU test run:     Colab, Tesla T4, Python 3.13.16, pytest 8.4.2
                   test_augment_gpu_shape_range_and_per_image_randomness  PASSED
                   6 passed, 3 deselected in 3.19s
 
-### A4.12 Filter test tolerances (P4: Lina)          date: 2026-11-09
-Scope:            the three filter tests in `tests/test_cpu_gpu_equivalence.py` (the preprocessing
-                  tests are covered by P3). 1 gray level = 1/255 ≈ 0.004.
-Measured so far:  checked with a NumPy re-implementation of each GPU function against
-                  `src/filters_cpu.py` (no CUDA machine available yet).
-
 ### A4.12 Filter test tolerances (P4: Lina) — 2026-11-09
 
 - **Config / commit:** none (tests only); filters at commit `30071bd` (A4.7–A4.10).
@@ -196,15 +213,6 @@ Measured so far:  checked with a NumPy re-implementation of each GPU function ag
   - **Contrast stretch (0.001): about right.** 0.001 is a quarter of a gray level, so invisible, and CPU and GPU compute the percentiles the same way (linear interpolation). It could be tightened slightly (e.g. 1e-4), but not much more: a tolerance too close to zero could fail a correct GPU version just because of floating-point rounding differences.
   - **Green channel: no test.** Nothing would warn us if the function returned the wrong channel (e.g. `t[:, 0:1]`, the red one).
 - **Decision:** keep the tests (all pass), but propose: a Gaussian tolerance of about 1 gray level; for the median, at most about 0.1% of pixels beyond 1 gray level, with a test image that is not black at the borders; and a green-channel test checking the shape `(N,1,H,W)`, the values (equal to `t[:, 1]`) and that the result is a view (same memory).
-
-### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina) — 2026-11-10, official run 2026-11-12
-
-- **Config / commit:** none (script defaults). Official run: `benchmarks/sweep_median.py` at commit `9faff69` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/sweep_median.csv`); Numba was not installed, so no Numba column (see A4.11). Colab draft: commit `9ce6840` (that version reported the std per batch; per image since `1954c73`); its CSV was not committed, numbers below copied from the console output.
-- **Question:** at which batch size (1, 8, 32, 64, 128) does the GPU median filter become faster per image than the CPU (OpenCV) one, if ever?
-- **Prediction:** at batch size 1 the GPU is slower than the CPU, because the fixed kernel launch overhead dominates. As the batch grows, the GPU time per image drops (the overhead is shared by more images) and goes below the CPU time at about batch size 64. The CPU time per image stays roughly constant.
-- **Command:** `python benchmarks/sweep_median.py` (batch sizes 1 8 32 64 128, 5 repeats, 2 warm-up runs, CUDA synchronized around every timed run; the batch is already on the GPU, so the host-to-device copy is excluded).
-- **Result:**
-  - **Official (P1, RTX 3050 Laptop 6 GB, i5-13420H), ms per image:**
 
 ### A4.13 CLAHE: GPU vs CPU time per image across batch sizes (P3: Inès)   date: 2026-11-11
 Question:             At which batch size (1, 8, 32, 64, 128) does the GPU CLAHE become faster
@@ -241,43 +249,16 @@ Decision:             Keep `clahe_gpu` in `preprocess_batch_gpu` for batched tra
                       inference (batch size >= 8, typically 32 or 64). P1 will run
                       `benchmarks/sweep_clahe.py` on the RTX 3050 for the official report numbers.
 
-### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina)   date: 2026-11-10
-Question:             At which batch size (1, 8, 32, 64, 128) does the GPU median filter become
-                      faster per image than the CPU (OpenCV) one, if ever?
-Prediction:           At batch size 1 the GPU is slower than the CPU, because the fixed kernel
-                      launch overhead dominates. As the batch grows, the GPU time per image drops
-                      (the overhead is shared by more images) and goes below the CPU time at
-                      about batch size 64. The CPU time per image stays roughly constant.
-Command:              python benchmarks/sweep_median.py   (default: batch sizes 1 8 32 64 128,
-                      5 repeats, 2 warm-up runs, CUDA synchronized around every timed run;
-                      the batch is already on the GPU, so the host-to-device copy is excluded)
-Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
-                        batch    CPU (OpenCV)   GPU (torch)
-                          1         0.73           3.58
-                          8         0.82           2.76
-                         32         0.84           2.44
-                         64         1.11           2.44
-                        128         1.10           2.45
-                      Colab's CPU is shared, so the CPU times are noisy.
-Prediction vs result: I predicted the GPU would overtake the CPU at batch size 64, but the CPU
-                      won at every batch size (about 2x faster at 128). The first part of the
-                      prediction was right: the GPU time per image drops from 3.58 to 2.44 ms as
-                      the launch overhead is shared by more images. But it becomes flat from
-                      batch 32 on: the GPU is then fully busy and 2.44 ms is the cost of the work
-                      itself, so bigger batches cannot help.
-Explanation:          The two versions do not do the same amount of work. OpenCV's medianBlur is a
-                      specialized algorithm tuned for 8-bit images that avoids sorting most values.
-                      My GPU version uses general operations: F.unfold copies each pixel's 25
-                      neighbours into memory (25x the input size, about 1.9 GB for 128 images),
-                      then torch.median sorts those 25 values once for every pixel. The extra memory
-                      traffic and generic sorting cost more than the GPU's parallelism gains.
-Decision:             Do not use this GPU median filter as is (it is not used in training anyway).
-                      To make it faster, fuse the steps into one custom kernel (e.g. Numba CUDA,
-                      A4.11): each thread reads its 25 neighbours directly and sorts them in
-                      registers, which removes the 25x copy. Tuning blocks / threads per block is a
-                      secondary improvement. Re-run on P1's RTX 3050 for the official numbers.
+### A4.13 Median filter: GPU vs CPU time per image across batch sizes (P4: Lina) — 2026-11-10, official run 2026-11-12
 
-| Batch | CPU (OpenCV) | GPU (torch) |
+- **Config / commit:** none (script defaults). Official run: `benchmarks/sweep_median.py` at commit `9faff69` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/sweep_median.csv`); Numba was not installed, so no Numba column (see A4.11). Colab draft: commit `9ce6840` (that version reported the std per batch; per image since `1954c73`); its CSV was not committed, numbers below copied from the console output.
+- **Question:** at which batch size (1, 8, 32, 64, 128) does the GPU median filter become faster per image than the CPU (OpenCV) one, if ever?
+- **Prediction:** at batch size 1 the GPU is slower than the CPU, because the fixed kernel launch overhead dominates. As the batch grows, the GPU time per image drops (the overhead is shared by more images) and goes below the CPU time at about batch size 64. The CPU time per image stays roughly constant.
+- **Command:** `python benchmarks/sweep_median.py` (batch sizes 1 8 32 64 128, 5 repeats, 2 warm-up runs, CUDA synchronized around every timed run; the batch is already on the GPU, so the host-to-device copy is excluded).
+- **Result:**
+  - **Official (P1, RTX 3050 Laptop 6 GB, i5-13420H), ms per image:**
+
+  | Batch | CPU (OpenCV) | GPU (torch) |
   |---|---|---|
   | 1 | 0.47 | 4.40 |
   | 8 | 0.68 | 3.69 |
@@ -292,47 +273,31 @@ Decision:             Do not use this GPU median filter as is (it is not used in
   - **The gap depends on the hardware:** it is bigger on the laptop (4× vs 2×) because its CPU is faster (newer, 8 cores / 12 threads that OpenCV can use, vs 2 shared cores on Colab: 0.68 vs 1.10 ms at batch 128) and its GPU slower (the RTX 3050 Laptop has 20 SMs vs 40 for the T4, so about half as many threads at once: 2.91 vs 2.45 ms).
 - **Decision:** do not use this GPU median filter as is (it is not used in training anyway). To make it faster, fuse the steps into one custom kernel (Numba CUDA, A4.11): each thread reads its 25 neighbours directly and sorts them in registers, which removes the 25× copy. Tuning blocks / threads per block is a secondary improvement. Since the CPU–GPU balance depends on the machine, a speed-up measured on one machine cannot be generalized to another: the official comparison is the laptop's.
 
-### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina)   date: 2026-11-10
-Motivation:           A4.13 showed the PyTorch median (pad + F.unfold + torch.median) is slower
-                      than OpenCV at every batch size, because it runs 3 kernels and writes a 25x
-                      intermediate tensor to GPU memory.
-Implementation:       src/filters_numba.py (wrapper: filters_gpu.median_filter_numba). One thread
-                      per output pixel, 2D blocks of 16x16 threads, one grid layer (blockIdx.z) per
-                      image-channel slice. Each thread reads its 5x5 neighbours directly (coordinates
-                      clamped to the image = replicate padding), sorts them in a private
-                      cuda.local.array with an insertion sort and writes the middle value.
-                      One kernel launch, no padding tensor, no 25x copy. Window fixed at 5x5.
-Correctness:          tests/test_cpu_gpu_equivalence.py::test_median_filter_numba_equivalence
-                      PASSED on Colab T4 (same rule as the PyTorch median test). Also checked in
-                      Numba's CUDA simulator on 20x20 and 23x17 images (0% of pixels off by more
-                      than 1 gray level; 23x17 exercises the out-of-image threads).
-Prediction:           No prediction was written before the run. Stated after the run: I expected
-                      it to be only slightly faster than the CPU, and only at larger batch sizes.
-Command:              python -m pytest tests/test_cpu_gpu_equivalence.py -k numba -v
-                      python benchmarks/sweep_median.py
-Result:               DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050). ms per image:
-                        batch    CPU (OpenCV)   PyTorch (A4.8)   Numba (A4.11)
-                          1         0.76            4.80            1.33
-                          8         0.80            3.79            0.51
-                         32         0.84            2.42            0.56
-                         64         0.84            2.43            0.56
-                        128         1.00            2.44            0.55
-Prediction vs result: Better than expected. The Numba kernel beats OpenCV from batch size 8 on
-                      (1.5-1.8x faster) and is about 4.4x faster than the PyTorch version from
-                      batch 32 on. At batch size 1 the CPU still wins (launch overhead).
-Explanation:          Fusion avoids the 25x memory copy: each thread reads its neighbours straight
-                      into its private array instead of F.unfold writing a 25x larger tensor to GPU
-                      memory and torch.median reading it back, and there is one kernel launch
-                      instead of three. Same GPU and same idea (sort 25 values per pixel), so the
-                      gain comes from less memory traffic. The GPU is saturated from batch 8 on
-                      (flat curve), earlier than the PyTorch version (batch 32), since there is less
-                      work per image. It wins over OpenCV despite using a simple insertion sort.
-Decision:             The fused kernel is the GPU median filter worth keeping. The median filter is
-                      not used in training, so this does not speed up the pipeline itself; it shows
-                      why kernel fusion matters. Possible next step: a faster sort (e.g. only
-                      partially sorting up to the 13th value). Re-run on P1's RTX 3050.
+### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
 
-dd9e6c75b5b8280f1223d1815229da0d7efba42b
+- **Config / commit:** none (script defaults). Official run: `benchmarks/h2d_copy.py` at commit `a59a759` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/h2d_copy.csv`). Colab draft: same commit; its CSV was not committed, numbers below copied from the console output.
+- **Question:** how long does copying one batch of images from CPU memory to the GPU take as uint8 vs as float32? (The second part, how much of the GPU preprocessing time is the copy, needs P3's `preprocess_batch_gpu`.)
+- **Prediction:** uint8 should be about 4× faster to copy, because it has 4× fewer bytes to move (1 byte per value instead of 4).
+- **Command:** `python benchmarks/h2d_copy.py` (batch sizes 1 8 32 128, 10 repeats, 2 warm-up runs, CUDA synchronized; pinning is done before timing, only the copy is timed).
+- **Result:**
+  - **Official (P1, RTX 3050 Laptop 6 GB), copy time in ms:**
+
+  | Batch | uint8, normal | float32, normal | Ratio | uint8, pinned | float32, pinned | Ratio |
+  |---|---|---|---|---|---|---|
+  | 1 | 0.054 | 0.132 | 2.4× | 0.042 | 0.136 | 3.2× |
+  | 8 | 0.332 | 1.064 | 3.2× | 0.203 | 0.549 | 2.7× |
+  | 32 | 0.754 | 3.798 | 5.0× | 0.556 | 2.001 | 3.6× |
+  | 128 | 3.399 | 17.313 | 5.1× | 2.062 | 8.700 | 4.2× |
+
+  Bandwidth for large batches: about 4.5–6.4 GB/s (normal) vs about 9.4 GB/s (pinned).
+  - **Draft (Colab, Tesla T4), copy time in ms:** uint8 normal 0.083 / 0.381 / 1.185 / 4.145; float32 normal 0.214 / 1.102 / 4.090 / 16.959; uint8 pinned 0.041 / 0.133 / 0.427 / 1.632; float32 pinned 0.079 / 0.443 / 1.629 / 6.328 (batch 1 / 8 / 32 / 128). Bandwidth for large batches about 4.6 GB/s (normal) vs about 12 GB/s (pinned).
+  - **Batch 32, float32 normal → uint8 pinned:** 3.80 → 0.56 ms (6.8×) on the laptop; 4.09 → 0.43 ms (9.5×) on Colab.
+- **Prediction vs result:** uint8 is faster than float32 at every batch size, on both machines. The predicted 4× holds for large batches (3.6–5.1× at 32–128 on the laptop, 3.9–4.1× at 128 on Colab), but not for small ones (2–3× at batch 1): every copy has a fixed start-up cost that dominates when the batch is tiny.
+- **Explanation:**
+  - **The copy time depends on the number of bytes, not on the type:** on Colab, uint8 at batch 128 and float32 at batch 32 are both 19.27 MB and take the same time (4.15 vs 4.09 ms normal, 1.63 vs 1.63 ms pinned).
+  - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
+  - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
+- **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Next: the second part of A4.14 needs P3's `preprocess_batch_gpu`.
 
 ### A4.16 Checkpoint questions (P3: Inès & P4: Lina)          date: 2026-11-11
 
@@ -386,113 +351,46 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
          on validation data preprocessed with `clahe_gpu` (and vice versa) to check whether
          switching implementations at inference time introduces any accuracy drop.
 
-### A6.4 & A6.11 Evaluation & Training Acceleration Checkpoint Questions (P3: Inès)   date: 2026-11-12
-
-0. Why inference time and training time must not be mixed up (A6.4):
-   - Training runs the forward pass, stores all intermediate layer activations in GPU memory to
-     build the autograd graph, executes the backward pass (~2x the compute of the forward pass
-     to compute gradients with respect to both activations and weights), updates parameters via
-     the optimizer (`AdamW` + `GradScaler`), and applies random data augmentation.
-   - Evaluation (`model.eval()` under `torch.no_grad()`) executes only the forward pass without
-     saving intermediate activations, without backward/optimizer steps, and without random
-     augmentations (`augment=False`). Consequently, inference throughput (images/s) is typically
-     ~3x higher and uses a fraction of the VRAM compared to training; comparing or averaging
-     the two would distort throughput and speedup claims.
-
-1. With AMP (`torch.autocast`), which operations stay in float32 and why?
-   - Operations cast to FP16: compute-heavy matrix multiplications and convolutions (`nn.Conv2d`,
-     `nn.Linear`, `bmm`, `matmul`), which leverage Tensor Cores on CUDA GPUs for higher math
-     throughput and halved activation memory traffic.
-   - Operations that stay in FP32: reductions (`sum`, `mean`, `var`, `norm`), normalization layers
-     (`BatchNorm2d`, `LayerNorm`), exponentials/logarithms and large-dynamic-range pointwise ops
-     (`exp`, `log`, `pow`, `softmax`, `log_softmax`), and loss functions (`CrossEntropyLoss`).
-     Master model weights and `AdamW` optimizer moments (`exp_avg`, `exp_avg_sq`) also remain in
-     FP32.
-   - Why: IEEE-754 FP16 has only 5 exponent bits (max value 65,504; subnormal underflow below
-     ~6e-5) and 10 mantissa bits (~3 decimal digits of precision). Computing `exp(x)` in
-     `softmax`/`CrossEntropyLoss` overflows to `inf` for logits > 11.1, while summing thousands
-     of elements in `BatchNorm` statistics or loss reductions suffers from catastrophic precision
-     loss (swamping when adding small numbers to a large running sum). Keeping reductions,
-     normalizations, losses, and master weights in FP32 preserves numerical stability while
-     retaining almost all the speed and memory benefits of FP16 convolutions.
-
-2. Why does a bigger batch size sometimes lower validation accuracy at the same learning rate?
-   - Fewer gradient updates per epoch: For a fixed dataset size N and a fixed number of epochs,
-     multiplying the batch size B by k reduces the number of optimizer steps per epoch (N / B)
-     by a factor of k. At the same learning rate, the model performs k times fewer parameter
-     updates and travels a shorter distance in weight space, leading to under-convergence within
-     the fixed epoch budget (unless the learning rate is scaled up, e.g. linear or sqrt scaling
-     with warmup).
-   - Loss of stochastic gradient noise (generalization gap): Small batches introduce higher
-     gradient variance across mini-batches, acting as implicit regularization that helps the
-     optimizer escape sharp local minima and settle into flatter basins of the loss landscape.
-     Very large batches compute nearly deterministic gradients and tend to converge to sharp
-     minima that generalize worse to unseen validation data.
-
-3. Is the accuracy difference between two runs larger than the difference between two seeds of
-   the same run? How many seeds do you need to say?
-   - Signal vs seed noise: Deep learning training is stochastic (random weight initialization,
-     mini-batch shuffling, and random flip/rotation augmentations). A single run cannot tell
-     whether a +0.8% validation accuracy gain comes from a genuine model/recipe improvement or
-     a lucky random seed. A change is only statistically meaningful if the difference between
-     configuration means exceeds the seed-to-seed variability (|mean_A - mean_B| > 2 * SE).
-   - How many seeds: Following our project protocol, `data.split_seed` is kept fixed so the
-     train/val split is identical, and at least n = 3 training `seed`s must be run per
-     configuration to report `mean +/- std` (2 degrees of freedom). While 3 seeds are the
-     practical minimum under a tight compute budget to detect large effects (>1.5-2%), small
-     accuracy differences (<0.5-1%) require 5 to 10 seeds because the Student-t critical value
-     at n = 3 (df = 2) is very wide (t_0.975 = 4.30 vs 2.78 at n = 5).
-
-### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
-
-- **Config / commit:** none (script defaults). Official run: `benchmarks/h2d_copy.py` at commit `a59a759` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/h2d_copy.csv`). Colab draft: same commit; its CSV was not committed, numbers below copied from the console output.
-- **Question:** how long does copying one batch of images from CPU memory to the GPU take as uint8 vs as float32? (The second part, how much of the GPU preprocessing time is the copy, needs P3's `preprocess_batch_gpu`.)
-- **Prediction:** uint8 should be about 4× faster to copy, because it has 4× fewer bytes to move (1 byte per value instead of 4).
-- **Command:** `python benchmarks/h2d_copy.py` (batch sizes 1 8 32 128, 10 repeats, 2 warm-up runs, CUDA synchronized; pinning is done before timing, only the copy is timed).
-- **Result:**
-  - **Official (P1, RTX 3050 Laptop 6 GB), copy time in ms:**
-
-  | Batch | uint8, normal | float32, normal | Ratio | uint8, pinned | float32, pinned | Ratio |
-  |---|---|---|---|---|---|---|
-  | 1 | 0.054 | 0.132 | 2.4× | 0.042 | 0.136 | 3.2× |
-  | 8 | 0.332 | 1.064 | 3.2× | 0.203 | 0.549 | 2.7× |
-  | 32 | 0.754 | 3.798 | 5.0× | 0.556 | 2.001 | 3.6× |
-  | 128 | 3.399 | 17.313 | 5.1× | 2.062 | 8.700 | 4.2× |
-
-  Bandwidth for large batches: about 4.5–6.4 GB/s (normal) vs about 9.4 GB/s (pinned).
-  - **Draft (Colab, Tesla T4), copy time in ms:** uint8 normal 0.083 / 0.381 / 1.185 / 4.145; float32 normal 0.214 / 1.102 / 4.090 / 16.959; uint8 pinned 0.041 / 0.133 / 0.427 / 1.632; float32 pinned 0.079 / 0.443 / 1.629 / 6.328 (batch 1 / 8 / 32 / 128). Bandwidth for large batches about 4.6 GB/s (normal) vs about 12 GB/s (pinned).
-  - **Batch 32, float32 normal → uint8 pinned:** 3.80 → 0.56 ms (6.8×) on the laptop; 4.09 → 0.43 ms (9.5×) on Colab.
-- **Prediction vs result:** uint8 is faster than float32 at every batch size, on both machines. The predicted 4× holds for large batches (3.6–5.1× at 32–128 on the laptop, 3.9–4.1× at 128 on Colab), but not for small ones (2–3× at batch 1): every copy has a fixed start-up cost that dominates when the batch is tiny.
-- **Explanation:**
-  - **The copy time depends on the number of bytes, not on the type:** on Colab, uint8 at batch 128 and float32 at batch 32 are both 19.27 MB and take the same time (4.15 vs 4.09 ms normal, 1.63 vs 1.63 ms pinned).
-  - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
-  - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
-- **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Next: the second part of A4.14 needs P3's `preprocess_batch_gpu`.
-
-### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina) — 2026-11-10
-
-- **Config / commit:** none (script defaults); `src/filters_numba.py` and `benchmarks/sweep_median.py` at commit `9faff69`.
-- **Question:** A4.13 showed the PyTorch median (pad + `F.unfold` + `torch.median`) is slower than OpenCV at every batch size. Can a second GPU version, a fused custom Numba CUDA kernel, beat OpenCV and the PyTorch version while staying correct?
-- **Prediction:** no prediction was written before the run. Stated after the run: I expected it to be only slightly faster than the CPU, and only at larger batch sizes.
-- **Command:** `python -m pytest tests/test_cpu_gpu_equivalence.py -k numba -v`, then `python benchmarks/sweep_median.py`
-- **Result:**
-  - **Correctness:** `test_median_filter_numba_equivalence` PASSED on Colab T4 (same rule as the PyTorch median test); also 0% of pixels beyond 1 gray level in Numba's CUDA simulator on 20×20 and 23×17 images (23×17 exercises out-of-image threads).
-  - **Speed:** DRAFT run on Colab, Tesla T4 (official run: P1, RTX 3050), ms per image:
-
-  | Batch | CPU (OpenCV) | PyTorch (A4.8) | Numba (A4.11) |
-  |---|---|---|---|
-  | 1 | 0.76 | 4.80 | 1.33 |
-  | 8 | 0.80 | 3.79 | 0.51 |
-  | 32 | 0.84 | 2.42 | 0.56 |
-  | 64 | 0.84 | 2.43 | 0.56 |
-  | 128 | 1.00 | 2.44 | 0.55 |
-
-- **Prediction vs result:** better than expected. The Numba kernel beats OpenCV from batch size 8 on (1.5–1.8× faster) and is about 4.4× faster than the PyTorch version from batch 32 on. At batch size 1 the CPU still wins (launch overhead).
-- **Explanation:**
-  - **Implementation** (`src/filters_numba.py`, wrapper `filters_gpu.median_filter_numba`): one thread per output pixel, 16×16 blocks, one grid layer (`blockIdx.z`) per image-channel slice. Each thread reads its 5×5 neighbours with coordinates clamped to the image (= replicate padding), sorts them in a private `cuda.local.array` (insertion sort) and writes the middle value. Window fixed at 5×5.
-  - **Why it is faster:** fusion avoids the 25× memory copy. Each thread reads its neighbours straight into its private array, instead of `F.unfold` writing a 25× larger tensor to GPU memory and `torch.median` reading it back, and there is one kernel launch instead of three. Same GPU and same idea (sort 25 values per pixel), so the gain comes from less memory traffic. The GPU is saturated from batch 8 on (flat curve), earlier than the PyTorch version (batch 32), since there is less work per image. It wins over OpenCV despite using a simple insertion sort.
-- **Decision:** the fused kernel is the GPU median filter worth keeping. The median filter is not used in training, so this does not speed up the pipeline itself; it shows why kernel fusion matters. Possible next step: a faster sort (e.g. only partially sorting up to the 13th value). Re-run on P1's RTX 3050.
-- **Prediction for the official rerun (P1, RTX 3050 laptop, with Numba installed), written before it:** the Numba kernel won't be much faster than the laptop's CPU, maybe about a tie, because the laptop's CPU is newer and has more cores than Colab's (OpenCV: 0.68 vs 1.10 ms at batch 128) while its GPU has half the SMs (the PyTorch median is about 19% slower on it: 2.91 vs 2.45 ms; the same slowdown would put Numba at about 0.65 ms vs OpenCV 0.68 ms).
+### A6.1, A6.2, A6.3 Mixed precision (AMP), channels_last, and torch.compile (P3: Inès)   date: 2026-11-14
+Question:             How much training speedup and VRAM reduction do AMP (`torch.autocast` +
+                      `GradScaler`), `channels_last` memory format, and `torch.compile` bring on
+                      `reference_cnn`, and does `channels_last` help in both FP32 and FP16?
+Prediction:           AMP should cut peak activation memory roughly in half and speed up training
+                      via FP16 Tensor Cores. `channels_last` (NHWC) should primarily help when
+                      combined with AMP because NVIDIA Tensor Cores natively require NHWC layout,
+                      whereas in FP32 it may bring no gain or slightly slow down cuDNN kernels.
+                      `torch.compile` should slightly improve steady-state epoch time and reduce
+                      VRAM via kernel fusion, at the cost of a large first-epoch (cold) compilation
+                      overhead on Linux.
+Command:              Controlled micro-benchmark via `run_epoch` on 512 images (16 batches of 32,
+                      3x224x224, `reference_cnn`, 1 cold epoch + 3 steady epochs, CUDA synchronized
+                      via `GpuTimer`).
+Result:               Measured on Google Colab, Tesla T4:
+                        Configuration                Cold epoch (ms)   Steady epoch ± std (ms)   Speedup   Peak VRAM (MB)
+                        1. FP32 + NCHW (baseline)         3943.9             855.5 ±  3.7         1.00x        870.4
+                        2. FP32 + channels_last           1033.7             944.5 ±  4.6         0.91x        878.0
+                        3. AMP  + NCHW                    1114.9             626.0 ±  2.8         1.37x        474.9
+                        4. AMP  + channels_last            522.4             487.6 ±  3.2         1.75x        467.8
+                        5. AMP  + CL + torch.compile     26661.8             477.4 ± 33.0         1.79x        400.0
+Prediction vs result: Matches the prediction. In FP32, enabling `channels_last` alone actually
+                      slows training down by ~10% (944.5 ms vs 855.5 ms), confirming that one must
+                      measure rather than assume it helps. However, once AMP is enabled, adding
+                      `channels_last` drops steady-state time from 626.0 ms to 487.6 ms (1.75x
+                      total speedup over baseline) and cuts peak VRAM by 46% (870.4 MB -> 467.8 MB).
+                      Adding `torch.compile` lowers peak VRAM further to 400.0 MB and reaches
+                      477.4 ms steady-state, but incurs a 26.66 s cold-epoch compilation cost.
+Explanation:          On Turing GPUs (Tesla T4 / RTX 3050), FP16 Tensor Core convolutions operate
+                      natively on NHWC (`channels_last`) tensors; keeping NCHW with AMP forces
+                      cuDNN to insert layout transposition kernels around convolutions. In FP32,
+                      standard CUDA cores prefer NCHW, so NHWC adds overhead without Tensor Core
+                      benefits. Finally, `torch.compile` fuses pointwise/BatchNorm/ReLU ops via
+                      Triton, saving 68 MB of activation memory and ~10 ms per epoch, but compiling
+                      Triton kernels on the first epoch takes ~26.1 s (and Triton is unsupported on
+                      Windows).
+Decision:             Enable `amp: true` and `channels_last: true` in `configs/optimized.yaml`.
+                      Keep `compile: false` by default because the 26.7 s cold-epoch overhead is
+                      not amortized over short training runs and P1's official benchmark machine
+                      runs Windows (where `src/train.py` automatically skips `torch.compile`).
 
 ### A6.6 Model size: parameters and FLOPs, reference CNN vs ResNet-18 (P4: Lina) — 2026-11-11
 
@@ -587,6 +485,63 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
 - **Explanation:** augmentation did what it is for: the model memorizes much less (train accuracy 0.78 instead of 0.96), but within 5 epochs this did not turn into better validation F1. The model was still improving at the end (train accuracy rising, best val accuracy at epoch 4): with augmentation, a model usually needs more epochs to benefit.
 - **Decision:** keep augmentation as an option for the final ResNet-18 recipe (it halves overfitting at almost no cost). Hypothesis to test if time allows: with a longer training budget for both runs, augmentation should improve val macro-F1.
 
+### A6.4 & A6.11 Evaluation & Training Acceleration Checkpoint Questions (P3: Inès)   date: 2026-11-12
+
+0. Why inference time and training time must not be mixed up (A6.4):
+   - Training runs the forward pass, stores all intermediate layer activations in GPU memory to
+     build the autograd graph, executes the backward pass (~2x the compute of the forward pass
+     to compute gradients with respect to both activations and weights), updates parameters via
+     the optimizer (`AdamW` + `GradScaler`), and applies random data augmentation.
+   - Evaluation (`model.eval()` under `torch.no_grad()`) executes only the forward pass without
+     saving intermediate activations, without backward/optimizer steps, and without random
+     augmentations (`augment=False`). Consequently, inference throughput (images/s) is typically
+     ~3x higher and uses a fraction of the VRAM compared to training; comparing or averaging
+     the two would distort throughput and speedup claims.
+
+1. With AMP (`torch.autocast`), which operations stay in float32 and why?
+   - Operations cast to FP16: compute-heavy matrix multiplications and convolutions (`nn.Conv2d`,
+     `nn.Linear`, `bmm`, `matmul`), which leverage Tensor Cores on CUDA GPUs for higher math
+     throughput and halved activation memory traffic.
+   - Operations that stay in FP32: reductions (`sum`, `mean`, `var`, `norm`), normalization layers
+     (`BatchNorm2d`, `LayerNorm`), exponentials/logarithms and large-dynamic-range pointwise ops
+     (`exp`, `log`, `pow`, `softmax`, `log_softmax`), and loss functions (`CrossEntropyLoss`).
+     Master model weights and `AdamW` optimizer moments (`exp_avg`, `exp_avg_sq`) also remain in
+     FP32.
+   - Why: IEEE-754 FP16 has only 5 exponent bits (max value 65,504; subnormal underflow below
+     ~6e-5) and 10 mantissa bits (~3 decimal digits of precision). Computing `exp(x)` in
+     `softmax`/`CrossEntropyLoss` overflows to `inf` for logits > 11.1, while summing thousands
+     of elements in `BatchNorm` statistics or loss reductions suffers from catastrophic precision
+     loss (swamping when adding small numbers to a large running sum). Keeping reductions,
+     normalizations, losses, and master weights in FP32 preserves numerical stability while
+     retaining almost all the speed and memory benefits of FP16 convolutions.
+
+2. Why does a bigger batch size sometimes lower validation accuracy at the same learning rate?
+   - Fewer gradient updates per epoch: For a fixed dataset size N and a fixed number of epochs,
+     multiplying the batch size B by k reduces the number of optimizer steps per epoch (N / B)
+     by a factor of k. At the same learning rate, the model performs k times fewer parameter
+     updates and travels a shorter distance in weight space, leading to under-convergence within
+     the fixed epoch budget (unless the learning rate is scaled up, e.g. linear or sqrt scaling
+     with warmup).
+   - Loss of stochastic gradient noise (generalization gap): Small batches introduce higher
+     gradient variance across mini-batches, acting as implicit regularization that helps the
+     optimizer escape sharp local minima and settle into flatter basins of the loss landscape.
+     Very large batches compute nearly deterministic gradients and tend to converge to sharp
+     minima that generalize worse to unseen validation data.
+
+3. Is the accuracy difference between two runs larger than the difference between two seeds of
+   the same run? How many seeds do you need to say?
+   - Signal vs seed noise: Deep learning training is stochastic (random weight initialization,
+     mini-batch shuffling, and random flip/rotation augmentations). A single run cannot tell
+     whether a +0.8% validation accuracy gain comes from a genuine model/recipe improvement or
+     a lucky random seed. A change is only statistically meaningful if the difference between
+     configuration means exceeds the seed-to-seed variability (|mean_A - mean_B| > 2 * SE).
+   - How many seeds: Following our project protocol, `data.split_seed` is kept fixed so the
+     train/val split is identical, and at least n = 3 training `seed`s must be run per
+     configuration to report `mean +/- std` (2 degrees of freedom). While 3 seeds are the
+     practical minimum under a tight compute budget to detect large effects (>1.5-2%), small
+     accuracy differences (<0.5-1%) require 5 to 10 seeds because the Student-t critical value
+     at n = 3 (df = 2) is very wide (t_0.975 = 4.30 vs 2.78 at n = 5).
+
 ### A7.2–A7.3 GPU profiler: test run on the baseline pipeline (P4: Lina) — 2026-11-12
 
 - **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `8960169` (after two fixes, see Explanation).
@@ -614,45 +569,3 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
   - **P2's work should help the most:** the decoded-image cache (A3) removes the repeated decoding, the main cost.
   - **For the copy:** copy uint8 batches from pinned memory, as A4.14 showed: pinned memory is P2's DataLoader option (A5.1), and copying uint8 needs P3's GPU preprocessing plugged in by P2's hook (A5.3).
   - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
-
-### A6.1, A6.2, A6.3 Mixed precision (AMP), channels_last, and torch.compile (P3: Inès)   date: 2026-11-14
-Question:             How much training speedup and VRAM reduction do AMP (`torch.autocast` +
-                      `GradScaler`), `channels_last` memory format, and `torch.compile` bring on
-                      `reference_cnn`, and does `channels_last` help in both FP32 and FP16?
-Prediction:           AMP should cut peak activation memory roughly in half and speed up training
-                      via FP16 Tensor Cores. `channels_last` (NHWC) should primarily help when
-                      combined with AMP because NVIDIA Tensor Cores natively require NHWC layout,
-                      whereas in FP32 it may bring no gain or slightly slow down cuDNN kernels.
-                      `torch.compile` should slightly improve steady-state epoch time and reduce
-                      VRAM via kernel fusion, at the cost of a large first-epoch (cold) compilation
-                      overhead on Linux.
-Command:              Controlled micro-benchmark via `run_epoch` on 512 images (16 batches of 32,
-                      3x224x224, `reference_cnn`, 1 cold epoch + 3 steady epochs, CUDA synchronized
-                      via `GpuTimer`).
-Result:               Measured on Google Colab, Tesla T4:
-                        Configuration                Cold epoch (ms)   Steady epoch ± std (ms)   Speedup   Peak VRAM (MB)
-                        1. FP32 + NCHW (baseline)         3943.9             855.5 ±  3.7         1.00x        870.4
-                        2. FP32 + channels_last           1033.7             944.5 ±  4.6         0.91x        878.0
-                        3. AMP  + NCHW                    1114.9             626.0 ±  2.8         1.37x        474.9
-                        4. AMP  + channels_last            522.4             487.6 ±  3.2         1.75x        467.8
-                        5. AMP  + CL + torch.compile     26661.8             477.4 ± 33.0         1.79x        400.0
-Prediction vs result: Matches the prediction. In FP32, enabling `channels_last` alone actually
-                      slows training down by ~10% (944.5 ms vs 855.5 ms), confirming that one must
-                      measure rather than assume it helps. However, once AMP is enabled, adding
-                      `channels_last` drops steady-state time from 626.0 ms to 487.6 ms (1.75x
-                      total speedup over baseline) and cuts peak VRAM by 46% (870.4 MB -> 467.8 MB).
-                      Adding `torch.compile` lowers peak VRAM further to 400.0 MB and reaches
-                      477.4 ms steady-state, but incurs a 26.66 s cold-epoch compilation cost.
-Explanation:          On Turing GPUs (Tesla T4 / RTX 3050), FP16 Tensor Core convolutions operate
-                      natively on NHWC (`channels_last`) tensors; keeping NCHW with AMP forces
-                      cuDNN to insert layout transposition kernels around convolutions. In FP32,
-                      standard CUDA cores prefer NCHW, so NHWC adds overhead without Tensor Core
-                      benefits. Finally, `torch.compile` fuses pointwise/BatchNorm/ReLU ops via
-                      Triton, saving 68 MB of activation memory and ~10 ms per epoch, but compiling
-                      Triton kernels on the first epoch takes ~26.1 s (and Triton is unsupported on
-                      Windows).
-Decision:             Enable `amp: true` and `channels_last: true` in `configs/optimized.yaml`.
-                      Keep `compile: false` by default because the 26.7 s cold-epoch overhead is
-                      not amortized over short training runs and P1's official benchmark machine
-                      runs Windows (where `src/train.py` automatically skips `torch.compile`).
-
