@@ -4,15 +4,18 @@ import numpy as np
 import torch
 
 
-def set_seed(seed: int):
+def set_seed(seed: int, benchmark: bool = False):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # TODO(A1.5): torch.backends.cudnn.benchmark = True picks the fastest conv
-    #             algorithm but makes runs less reproducible. Decide what you want
-    #             for the baseline and for the benchmarks, and justify it in the report.
+        # A1.5: Baseline uses benchmark=False (deterministic=True) for strict run-to-run
+        # reproducibility; GPU benchmarks / fixed-shape (224x224) optimized runs can enable
+        # benchmark=True (with warm-up / separate cold-epoch reporting) to select the fastest
+        # cuDNN convolution kernels.
+        torch.backends.cudnn.deterministic = not benchmark
+        torch.backends.cudnn.benchmark = benchmark
 
 
 class GpuTimer:

@@ -18,7 +18,56 @@ Decision:             <keep / drop the change, and what you do next>
 
 ## A1.3 Baseline configuration review
 
-TODO(A1.3): answers to the questions listed at the top of `configs/baseline.yaml`.
+1. **Alignment with the project brief (Sections 3, 4, and 7):**
+   - `seed: 42`: Required by the brief to ensure reproducible dataset splitting, shuffling, and weight initialization.
+   - `data.root: data/dr_dataset`, `data.image_size: [224, 224]`, `data.num_classes: 5`: Required 5-class diabetic retinopathy grading task (classes 0 to 4) at fixed $224 \times 224$ RGB resolution.
+   - `data.train_frac: 0.70`, `data.val_frac: 0.15`: Required 70% train / 15% validation / 15% test split ($1 - 0.70 - 0.15 = 0.15$).
+   - `data.batch_size: 32`, `data.num_workers: 2`: Baseline DataLoader settings before pipeline optimization.
+   - `preprocess` (`clahe: true`, `circular_crop: true`, `normalize: true`, `gamma: 1.0`): Required Module B preprocessing steps (circular fundus mask, local contrast enhancement via CLAHE, and per-channel normalization).
+   - `train` (`model: reference_cnn`, `epochs: 5`, `lr: 0.001`, `amp: false`, `weight_decay: 0.0`, `label_smoothing: 0.0`): Required Module E reference CNN trained in FP32 (`amp: false`) for 5 epochs with AdamW (`lr = 1e-3`).
+
+2. **Patient-level split enforcement:**
+   - Yes, the split is strictly patient-level so that multiple fundus photographs (left/right eye or repeated captures) from the same patient never appear across both `train` and `val`/`test` (preventing data leakage and artificially inflated validation/test accuracy).
+   - This is enforced in `src/data_loader.py` by `patient_id(path)` (which parses the patient identifier prefix before `_` in each filename) and `split_by_patient(items, train_frac, val_frac, seed)` (called inside `make_loaders`).
+
+3. **Checkpoint selection rule and test-set isolation:**
+   - In `src/train.py`, `checkpoints/<run>/best.pt` is overwritten at the end of an epoch if and only if validation accuracy strictly improves (`if va_acc > best_val: best_val = va_acc; torch.save(...)`).
+   - It is completely free of test-set leakage: `src/train.py` only requests `which=("train", "val")` from `make_loaders`. The `test` split is never loaded during training or model selection and is used exclusively in `src/evaluate.py`.
+
+4. **Keys kept identical vs keys added in `configs/optimized.yaml` for a fair comparison:**
+   - **Kept identical:** `data.root`, `data.num_classes: 5`, `data.train_frac: 0.70`, `data.val_frac: 0.15`, `data.split_seed: 42` (locked to baseline `seed: 42` so patient splits remain identical across all experiments and random seeds), and `train.epochs: 5` (identical training budget).
+   - **Added / updated in `configs/optimized.yaml`:**
+     - Data loading & caching (A3, A5): `data.split_seed: 42`, `data.cache: true` (uint8 `np.memmap` decoded cache), `data.pin_memory: true`, `data.persistent_workers: true`, `data.prefetch_factor: 2`, `data.prefetch_gpu: true` (`CudaPrefetcher`), and tuned `data.batch_size` / `data.num_workers`.
+     - GPU preprocessing & augmentation (A4, A5): `preprocess.gpu: true` (`preprocess_batch_gpu` operating on uint8 batches transferred over PCIe) and `preprocess.augment: true` (`augment_batch_gpu`).
+     - Training acceleration & model redesign (A6): `train.amp: true` (`torch.autocast` + `GradScaler`), `train.channels_last: true` (NHWC layout for Tensor Cores), `train.compile: false` (evaluated in A6.3, disabled by default due to 26.7 s cold-epoch compilation overhead and Windows incompatibility), and model redesign keys (`train.model`, `train.scheduler`, `train.weight_decay`, `train.label_smoothing`).
+
+## A1.5 Decision on `torch.backends.cudnn.benchmark`
+
+- **Baseline (`benchmark = False`, `deterministic = True`):** The baseline requires strict run-to-run reproducibility so that fixing `seed` produces identical loss and accuracy trajectories. Leaving `benchmark = False` prevents timing noise during cuDNN autotuning from picking different convolution algorithms (which accumulate floating-point sums in different orders) and avoids one-off search overhead on short verification runs.
+- **GPU Benchmarks & Optimized Pipeline (`benchmark = True` with warm-up / separate cold-epoch reporting):** Because all input batches have a fixed spatial shape `(B, 3, 224, 224)` (especially with `drop_last=True`), cuDNN autotuning pays a one-time search cost on the first batch to benchmark candidate convolution algorithms (Winograd, implicit GEMM, Tensor Core NHWC kernels) and caches the fastest kernel for all subsequent batches. In micro-benchmarks, warm-up runs absorb this search cost; in full training (`src/train.py`), reporting `cold_epoch_s` separately from `steady_epoch_s` isolates first-epoch initialization from steady-state throughput.
+
+## A1.6 Source code walkthrough: mapping Modules A-E to functions
+
+- **Module A — Data loading, patient-safe splitting, and caching (`src/data_loader.py`, `src/prefetcher.py`):**
+  - `find_images(root)`: scans class subfolders `0..4` and returns `(filepath, label)` pairs.
+  - `patient_id(path)` & `split_by_patient(items, train_frac, val_frac, seed)`: groups images by patient ID and partitions patients into disjoint `train`, `val`, and `test` splits.
+  - `build_cache(items, image_size, cache_dir, workers)`: decodes and resizes images once into a read-only `uint8` `np.memmap` array on disk (A3.1).
+  - `DRDataset` (`load`, `__getitem__`): loads decoded RGB images (from disk or memmap cache) and applies CPU transforms or returns raw `uint8` CHW tensors when `gpu_preprocess=True`.
+  - `make_loaders(cfg, device_type, gpu_preprocess, which)`: builds PyTorch `DataLoader` instances for each split.
+  - `CudaPrefetcher` (`src/prefetcher.py`): overlaps host-to-device transfers with GPU compute using a dedicated CUDA stream (A5.2).
+- **Module B — Image preprocessing (`src/preprocess_cpu.py`, `src/preprocess_gpu.py`):**
+  - *CPU (`src/preprocess_cpu.py`):* `circular_crop(img)` (retinal field-of-view circular mask), `apply_clahe(img, clip_limit, tile_grid_size)` (OpenCV LAB-space CLAHE), `contrast_stretch(img)`, `normalize(img, mean, std)`, orchestrated by `preprocess_image(img, cfg, rng)` and `PreprocessTransform`.
+  - *GPU (`src/preprocess_gpu.py`):* `circular_crop_gpu(batch)`, `clahe_gpu(batch, clip_limit, tile_grid_size)` (batched CIE L* 8x8 tile histogram equalization with `scatter_add_` and bilinear LUT interpolation), `contrast_stretch_gpu(batch)`, `normalize_gpu(batch, mean, std)`, orchestrated on GPU batches by `preprocess_batch_gpu(batch, cfg, augment, device)`.
+- **Module C — Spatial filtering and denoising (`src/filters_cpu.py`, `src/filters_gpu.py`, `src/filters_numba.py`):**
+  - *CPU (`src/filters_cpu.py`):* `gaussian_filter(img, ksize, sigma)` (`cv2.GaussianBlur`) and `median_filter(img, ksize)` (`cv2.medianBlur`).
+  - *GPU (`src/filters_gpu.py`, `src/filters_numba.py`):* `gaussian_filter_gpu(batch, ksize, sigma)` (separable 1D depthwise convolutions), `median_filter_gpu(batch, ksize)` (`F.unfold` + `torch.median`), and `median_filter_numba(batch, ksize)` (custom 2D CUDA kernel via Numba).
+- **Module D — Data augmentation (`src/preprocess_cpu.py`, `src/preprocess_gpu.py`):**
+  - *CPU:* `augment_image(img, rng)` (random horizontal/vertical flips and $90^\circ$ rotations, applied only to the training split inside `preprocess_image`).
+  - *GPU:* `augment_batch_gpu(batch)` (vectorized per-image random flips and $90^\circ$ rotations on GPU batches inside `preprocess_batch_gpu` when `augment=True`).
+- **Module E — Model architecture, training loop, and evaluation (`src/model.py`, `src/train.py`, `src/train_cpu.py`, `src/train_gpu.py`, `src/evaluate.py`):**
+  - *Model (`src/model.py`):* `ReferenceCNN` (4-stage Conv-BN-ReLU-MaxPool backbone + `AdaptiveAvgPool2d` + linear classifier) and `build_model(name, num_classes)` (`reference_cnn` or `resnet18`).
+  - *Training (`src/train.py`, `src/train_cpu.py`, `src/train_gpu.py`):* `run_epoch` (single-epoch forward/backward pass with on-device metric accumulation, AMP `autocast` + `GradScaler`, and `channels_last`), `macro_f1(conf)`, `resolve_gpu_preprocess`, `make_gpu_pre`, and `main` (epoch loop, AdamW/CosineAnnealingLR, peak VRAM tracking, validation-only checkpointing to `best.pt`, and logging to `history.json`).
+  - *Evaluation (`src/evaluate.py`):* `main` (loads `best.pt`, runs final test-set inference under `torch.no_grad()` matching training precision/memory layout, and writes accuracy, macro P/R/F1, per-class metrics, confusion matrix, and inference throughput to `metrics.json`).
 
 ## Entries
 
