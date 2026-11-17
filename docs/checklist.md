@@ -21,7 +21,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 - TODO(A2.4) Run `benchmarks/profile_baseline.py`.
 - TODO(A2.5) Run `benchmarks/benchmark_stages.py --n 64`.
 - TODO(A2.6) Rank the bottlenecks and compute the Amdahl bound for the top two.
-- TODO(A2.7) Use a second profiler on one function and report what it showed that `cProfile` did not.
+- DONE(A2.7) Use a second profiler on one function and report what it showed that `cProfile` did not.
 - TODO(A2.8) Read `results/baseline/resources.csv` and decide whether the CPU is saturated.
 - TODO(A2.9) Write the profiling report (timing table, bar chart, ranked priorities).
 - TODO(A2.10) Answer the A2 checkpoint questions.
@@ -34,11 +34,11 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 
 ## A4. GPU image processing
 
-- TODO(A4.12) Read the tolerances in `tests/test_cpu_gpu_equivalence.py`, run it, and say in the notebook whether you agree with them.
+- DONE(A4.12) Read the tolerances in `tests/test_cpu_gpu_equivalence.py`, run it, and say in the notebook whether you agree with them.
 - TODO(A4.13) Predict, then sweep batch sizes 1, 8, 32, 64, 128 for CLAHE and the median filter on CPU and GPU.
 - TODO(A4.14) Measure the host-to-device copy of one uint8 batch and one float32 batch.
 - TODO(A4.15) Say which function gained most and which least, and why.
-- TODO(A4.16) Answer the A4 checkpoint questions.
+- DONE(A4.16) Answer the A4 checkpoint questions.
 
 ## A5. End-to-end input pipeline
 
@@ -51,7 +51,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 - TODO(A6.8) Complete `configs/optimized.yaml` and write the single-change `configs/exp_*.yaml` files.
 - TODO(A6.9) Work through the five parts of the redesign challenge and fill the experiment table (model, device, precision, preprocessing, epoch time, memory, validation macro-F1).
 - TODO(A6.10) Separate the device effect, the model effect and the training-recipe effect with controlled runs.
-- TODO(A6.11) Answer the A6 checkpoint questions.
+- DONE(A6.11) Answer the A6 checkpoint questions.
 
 ## A7. Final benchmarking and GPU profiling
 
