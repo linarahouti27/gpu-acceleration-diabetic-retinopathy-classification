@@ -19,12 +19,8 @@ def set_seed(seed: int, benchmark: bool = False):
 
 
 class GpuTimer:
-    """Wall-clock timer. Use as: `with GpuTimer(device) as t: ...` then `t.elapsed`.
-
-    TODO(A2.1): CUDA kernels are asynchronous, so perf_counter alone only
-    measures the time to launch them. When the device is CUDA, call
-    torch.cuda.synchronize(self.device) before reading the clock in __enter__
-    and again in __exit__.
+    """Wall-clock timer with CUDA synchronization (A2.1).
+    Use as: `with GpuTimer(device) as t: ...` then `t.elapsed`.
     """
 
     def __init__(self, device):
@@ -32,10 +28,14 @@ class GpuTimer:
         self.elapsed = 0.0
 
     def __enter__(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
         self._t0 = time.perf_counter()
         return self
 
     def __exit__(self, *exc):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
         self.elapsed = time.perf_counter() - self._t0
         return False
 
