@@ -750,31 +750,37 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
   - **For the copy:** copy uint8 batches from pinned memory, as A4.14 showed: pinned memory is P2's DataLoader option (A5.1), and copying uint8 needs P3's GPU preprocessing plugged in by P2's hook (A5.3).
   - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
  
-###A2.6 Rank the bottlenecks and compute the Amdahl bound
-**Config / commit**: baseline profile, results/profile_stages.json (produced by A2.4, benchmarks/profile_baseline.py), machine: Colab T4 (trial run), commit 6c43b90
-**Question**: which stages dominate the baseline, and what is the best possible end-to-end speedup if only that stage is optimised?
-**Prediction**: I expect the ranking to be: (1) CLAHE and the other filters, (2) forward + backward, (3) image loading, (4) the rest. Reasoning: CLAHE works on local tiles and is known to be slow in OpenCV, and we run it on every image. The model is small, so I expect the GPU compute to be moderate. Decoding JPEGs should be quick, since cv2 uses an optimised library.
-Command: Amdahl bound S_max = 1 / (1 - p), computed from the fractions field of profile_stages.json
-**Result**:
-Stage	Share of total time
-loading (decode+resize)	63.5%
-backward	17.6%
-forward	14.5%
-preprocessing (total)	3.4%
-clahe	1.8%
-other	0.9%
-normalize	0.8%
-circular_crop	0.7%
-optimizer_step	0.2%
-(clahe, normalize and circular_crop are parts of preprocessing (total), not additional stages.)
+### A2.6 Rank the bottlenecks and compute the Amdahl bound
 
-Stage	p	Amdahl bound 1/(1-p)
-loading (decode+resize)	0.635	2.74x
-backward	0.176	1.21x
-loading (decode+resize) + backward together	0.811	5.29x
-forward + backward	0.321	1.47x
-preprocessing (total)	0.034	1.03x
-Prediction vs result: My A2.3 prediction was wrong about the top spot: I expected CLAHE/preprocessing to dominate, but the profile shows loading (decode+resize) is largest at 63.5%. CLAHE turned out faster than I thought (cv2's CLAHE is more optimised than I assumed), and JPEG decode + resize is the real bottleneck, not the filters. The #2 slot is backward (17.6%).
-Explanation: Data loading (JPEG decode + resize) dominates at 63.5%: in the baseline it runs on the CPU for every image at every epoch, while the GPU-side work (forward + backward) is only 32.1%. Optimising loading alone cannot exceed 2.74x; the bound for backward alone is only 1.21x. Preprocessing is only 3.4%, so moving it to the GPU gives at most 1.03x by itself. These bounds are ceilings: real gains are lower because no stage becomes free (a cache still reads from disk, for example).
-Decision: Attack loading first (A3 decoded-image cache, A5 DataLoader options and prefetching). Once loading is reduced, forward + backward become the next bottleneck, with a ceiling of 1.47x on the baseline. GPU preprocessing is kept for its transfer and CPU-offload benefits, not for its own share.
+- **Config / commit:** baseline profile, `results/profile_stages.json` (produced by A2.4, `benchmarks/profile_baseline.py`), machine: Colab T4 (trial run), commit 6c43b90
+- **Question:** which stages dominate the baseline, and what is the best possible end-to-end speedup if only that stage is optimised?
+- **Prediction:** not recorded. A2.3 was skipped for lack of time, so no prediction was written before profiling. The ranking below is therefore after the fact.
+- **Command:** Amdahl bound `S_max = 1 / (1 - p)`, computed from the `fractions` field of `profile_stages.json`.
 
+**Result:**
+
+| Stage | Share of total time |
+|---|---|
+| loading (decode+resize) | 63.5% |
+| backward | 17.6% |
+| forward | 14.5% |
+| preprocessing (total) | 3.4% |
+| &nbsp;&nbsp;clahe | 1.8% |
+| other | 0.9% |
+| &nbsp;&nbsp;normalize | 0.8% |
+| &nbsp;&nbsp;circular_crop | 0.7% |
+| optimizer_step | 0.2% |
+
+`clahe`, `normalize` and `circular_crop` are parts of `preprocessing (total)`, not additional stages.
+
+| Stage | p | Amdahl bound 1/(1-p) |
+|---|---|---|
+| loading (decode+resize) | 0.635 | 2.74x |
+| backward | 0.176 | 1.21x |
+| loading (decode+resize) + backward together | 0.811 | 5.29x |
+| forward + backward | 0.321 | 1.47x |
+| preprocessing (total) | 0.034 | 1.03x |
+
+- **Prediction vs result:** not applicable, since no prediction was recorded beforehand. The profile shows loading (decode+resize) as the largest stage at 63.5%, backward second at 17.6%. CLAHE is only 1.8%, so the filters are not the bottleneck.
+- **Explanation:** data loading (JPEG decode + resize) dominates at 63.5%: in the baseline it runs on the CPU for every image at every epoch, while the GPU-side work (forward + backward) is only 32.1%. Optimising loading alone cannot exceed 2.74x; the bound for backward alone is only 1.21x. Preprocessing is only 3.4%, so moving it to the GPU gives at most 1.03x by itself. These bounds are ceilings: real gains are lower because no stage becomes free (a cache still reads from disk, for example).
+- **Decision:** attack loading first (A3 decoded-image cache, A5 DataLoader options and prefetching). Once loading is reduced, forward + backward become the next bottleneck, with a ceiling of 1.47x on the baseline. GPU preprocessing is kept for its transfer and CPU-offload benefits, not for its own share.
