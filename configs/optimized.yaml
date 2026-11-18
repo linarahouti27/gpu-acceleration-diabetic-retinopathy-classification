@@ -10,8 +10,6 @@ data:
   val_frac: 0.15
   batch_size: 32            # TODO(A6.7): tune (throughput, GPU memory, validation accuracy)
   num_workers: 2            # TODO(A5.8): tune; find the point where more workers stop helping
-  # prefetch_factor: 2      # TODO(A5.1): batches each worker keeps ready (needs num_workers > 0)
-  # cache_dir: data/cache   # TODO(A3.3): decoded uint8 cache; null disables it
   # prefetch_gpu: false     # TODO(A5.5): overlap host-to-device copy with compute
 preprocess:
   clahe: true

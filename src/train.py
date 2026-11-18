@@ -29,14 +29,19 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None,
 
     gpu_pre: optional callable(uint8 batch) -> preprocessed NCHW tensor on `device`;
         when given, it replaces x.to(device).
-    scaler: optional torch.amp.GradScaler for mixed-precision training (A6.1).
-    amp: whether automatic mixed precision (torch.autocast) is enabled (A6.1).
-    channels_last: whether to convert input batches to NHWC memory format (A6.2).
+
+    TODO(A6.1): add mixed precision. New parameters: scaler, amp.
+        Wrap the forward pass and the loss in torch.autocast(device.type, enabled=amp)
+        and replace backward/step with the GradScaler pattern
+        (scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()).
+    TODO(A6.2): add `channels_last` (convert the input batch with
+        x.contiguous(memory_format=torch.channels_last)).
     """
     train = optimizer is not None
     model.train() if train else model.eval()
     loss_sum = torch.zeros((), device=device)
     correct = torch.zeros((), device=device, dtype=torch.long)
+    total = 0
     total = 0
     with torch.enable_grad() if train else torch.no_grad():
         # A2.2: loss_sum and correct stay on the GPU as tensors, so the host never

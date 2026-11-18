@@ -92,7 +92,6 @@ def main():
 
     # ---- GPU rows (yours) ----
     if has_cuda:
-        # TODO(A5.6): add one GPU row for every CPU row above, same N images, same `add` helper:
         #   loading         - pick one: GPU decode with torchvision.io.decode_jpeg(device="cuda")
         #                     (JPEG inputs only) or the uint8 cache from A3. State which one.
         #   h2d_transfer    - a pinned uint8 batch copied to the device (the price every GPU stage pays)
@@ -106,7 +105,6 @@ def main():
         pass
 
     df = pd.DataFrame(rows)
-    # TODO(A5.7): add a speedup_vs_cpu column = cpu mean_s / gpu mean_s for every stage that has both.
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     df.to_csv(args.out, index=False)
     print(df.to_string(index=False))
