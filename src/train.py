@@ -21,7 +21,8 @@ def macro_f1(conf):
     return (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean().item()
 
 
-def run_epoch(model, loader, criterion, device, optimizer=None, conf=None, gpu_pre=None):
+def run_epoch(model, loader, criterion, device, optimizer=None, conf=None,
+              gpu_pre=None, scaler=None, amp=False, channels_last=False):
     """One pass over `loader`. Returns (mean loss, accuracy, n_images).
     If `conf` (a (C, C) long tensor on `device`) is given, it is updated in place with the
     confusion matrix, so the caller can compute macro-F1 with `macro_f1`.
@@ -43,15 +44,6 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None, gpu_p
     total = 0
     total = 0
     with torch.enable_grad() if train else torch.no_grad():
-
-        # loss_sum and correct are accumulated as GPU tensors throughout the loop.
-        # The current code retrieves their values using .item() only after the loop.
-        # Calling loss.item() inside the loop would force a GPU synchronization per batch.
-        # This would make the CPU wait and reduce overlap with the next batch's data transfer.
-        # loss_sum and correct are accumulated as GPU tensors throughout the loop.
-        # Their values are retrieved using .item() only after the loop.
-        # Calling loss.item() inside the loop would force GPU synchronization per batch.
-        # This would make the CPU wait and reduce overlap with the next batch's data transfer.
         # A2.2: loss_sum and correct stay on the GPU as tensors, so the host never
         # waits inside the loop. The line that would sync on EVERY batch if
         # rewritten is `loss_sum += loss.detach().float() * x.size(0)`: with
@@ -65,12 +57,20 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None, gpu_p
                 x = gpu_pre(x)  # uint8 host batch -> preprocessed NCHW on device
             else:
                 x = x.to(device, non_blocking=True)
-            logits = model(x)
-            loss = criterion(logits, y)
+            if channels_last:
+                x = x.contiguous(memory_format=torch.channels_last)
+            with torch.autocast(device.type, enabled=amp):
+                logits = model(x)
+                loss = criterion(logits, y)
             if train:
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
             loss_sum += loss.detach().float() * x.size(0)
             pred = logits.argmax(1)
             correct += (pred == y).sum()
@@ -107,14 +107,16 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     augment = bool(cfg["preprocess"].get("augment", False))
     gpu_pre_train = make_gpu_pre(cfg, device, augment=augment) if gpu_pre_on else None
     gpu_pre_val = make_gpu_pre(cfg, device, augment=False) if gpu_pre_on else None
-    # TODO(A6.1): amp = cfg["train"].get("amp", False) and device.type == "cuda"; create a
-    #             torch.amp.GradScaler("cuda", enabled=amp) and pass both to run_epoch.
-    # TODO(A6.2): read cfg["train"].get("channels_last", False); convert the model with
-    #             model.to(memory_format=torch.channels_last) and pass the flag to run_epoch.
-    # TODO(A6.3, optional): read cfg["train"].get("compile", False); when true on CUDA, train through
-    #             torch.compile(model) but save the state_dict of the ORIGINAL model so
-    #             checkpoint keys stay clean. Record the cold-epoch cost in the report.
-    #             torch.compile needs Triton (Linux). On Windows skip it and say so in the report.
+
+    # A6.1: Automatic Mixed Precision (AMP) and GradScaler
+    amp = bool(cfg["train"].get("amp", False)) and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=amp)
+
+    # A6.2: channels_last memory format
+    channels_last = bool(cfg["train"].get("channels_last", False))
+
+    # A6.3: optional torch.compile (requires Triton on Linux + CUDA; skipped on Windows)
+    use_compile = bool(cfg["train"].get("compile", False)) and device.type == "cuda" and os.name != "nt"
 
     loaders, splits = make_loaders(cfg, device.type, gpu_preprocess=gpu_pre_on, which=("train", "val"))
     if cfg["data"].get("prefetch_gpu", False) and device.type == "cuda":
@@ -122,9 +124,14 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
         loaders = {k: CudaPrefetcher(v, device) for k, v in loaders.items()}
     split_sizes = {k: len(v) for k, v in splits.items()}
     print(f"[train:{run}] device={device} gpu_preprocess={gpu_pre_on} "
-          f"augment={augment} splits={split_sizes}", flush=True)
+          f"augment={augment} amp={amp} channels_last={channels_last} "
+          f"compile={use_compile} splits={split_sizes}", flush=True)
 
     model = build_model(cfg["train"]["model"], cfg["data"]["num_classes"]).to(device)
+    if channels_last:
+        model = model.to(memory_format=torch.channels_last)
+    run_model = torch.compile(model) if use_compile else model
+
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["train"]["lr"],
                             weight_decay=cfg["train"].get("weight_decay", 0.0))
     sched = None
@@ -147,11 +154,17 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
                 torch.cuda.reset_peak_memory_stats(device)
             # A5.3, A6.1, A6.2: pass gpu_pre, scaler, amp and channels_last to both run_epoch calls
             with GpuTimer(device) as ttr:
-                tr_loss, tr_acc, n_tr = run_epoch(model, loaders["train"], crit, device, opt)
+                tr_loss, tr_acc, n_tr = run_epoch(
+                    run_model, loaders["train"], crit, device, opt,
+                    gpu_pre=gpu_pre_train, scaler=scaler, amp=amp, channels_last=channels_last
+                )
             conf = torch.zeros(cfg["data"]["num_classes"], cfg["data"]["num_classes"],
                                dtype=torch.long, device=device)
             with GpuTimer(device) as tva:
-                va_loss, va_acc, n_va = run_epoch(model, loaders["val"], crit, device, conf=conf)
+                va_loss, va_acc, n_va = run_epoch(
+                    run_model, loaders["val"], crit, device, conf=conf,
+                    gpu_pre=gpu_pre_val, amp=amp, channels_last=channels_last
+                )
             va_f1 = macro_f1(conf)
             if sched is not None:
                 sched.step()
@@ -168,6 +181,7 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
                   f"({n_tr / ttr.elapsed:.0f} img/s)", flush=True)
             if va_acc > best_val:          # model selection on VAL only, never on test
                 best_val = va_acc
+                # Save original uncompiled model.state_dict() so checkpoint keys stay clean (A6.3)
                 torch.save({"model": model.state_dict(), "cfg": cfg, "val_acc": va_acc,
                             "epoch": epoch}, os.path.join(ckpt_dir, "best.pt"))
     finally:
@@ -178,8 +192,9 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     epoch_times = [h["train_time_s"] + h["val_time_s"] for h in history]
     steady = epoch_times[1:] or epoch_times
     save_json({"run": run, "config": cfg_path, "cfg": cfg, "device": device_str,
-               "gpu_preprocess": gpu_pre_on, "augment": augment, "splits": split_sizes,
-               "setup_time_s": setup_s, "wall_time_s": wall_s,
+               "gpu_preprocess": gpu_pre_on, "augment": augment,
+               "amp": amp, "channels_last": channels_last, "compile": use_compile,
+               "splits": split_sizes, "setup_time_s": setup_s, "wall_time_s": wall_s,
                "cold_epoch_s": epoch_times[0], "steady_epoch_s": sum(steady) / len(steady),
                "best_val_acc": best_val, "history": history},
               os.path.join(out_dir, "history.json"))

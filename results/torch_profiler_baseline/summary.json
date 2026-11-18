@@ -1,0 +1,19 @@
+{
+  "config": "configs/baseline.yaml",
+  "model": "reference_cnn",
+  "batch_size": 32,
+  "gpu": "Tesla T4",
+  "gpu_preprocess": false,
+  "amp": false,
+  "channels_last": false,
+  "warmup_steps": 5,
+  "profiled_steps": 15,
+  "wall_ms": 25150.490486999843,
+  "wall_ms_per_step": 1676.6993657999894,
+  "gpu_kernel_ms": 1022.6793349999547,
+  "h2d_memcpy_ms": 163.93647099999978,
+  "h2d_bytes": 289017600,
+  "d2h_memcpy_ms": 0.0,
+  "gpu_busy_ms": 1173.6279529999774,
+  "gpu_idle_fraction": 0.95333578271141
+}
