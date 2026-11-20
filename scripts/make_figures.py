@@ -22,7 +22,23 @@ OUT = os.path.join("results", "figures")
 def fig1_baseline_breakdown():
     """TODO(A8.1): Figure 1. Bar chart (or stacked bar) of the baseline runtime per stage,
     as a share of the total, from results/profile_stages.json. Label the axes with units."""
-    raise NotImplementedError("TODO(A8.1)")
+    st = prof["stages_s"]
+    top = {k: v for k, v in st.items() if not k.startswith(" ")}
+    items = sorted(top.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k for k, _ in items]
+    vals = [v for _, v in items]
+    total = sum(vals) or 1.0
+    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
+    bars = ax.bar(labels, [100 * v / total for v in vals], color="#2E5496")
+    ax.set_ylabel("Share of baseline epoch time (%)")
+    ax.set_title("Figure 1 - Baseline runtime per stage")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    for b, v in zip(bars, vals):
+        ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
+                f"{v:.1f}s", ha="center", va="bottom", fontsize=8)
+    fig.savefig(os.path.join(OUT, "fig1_baseline_breakdown.png"), dpi=150)
+    plt.close(fig)
 
 
 def fig2_speedup():
