@@ -162,7 +162,6 @@ Decoding once and reading raw uint8 pixels from a memory-mapped file removes it.
 1. **TODO(A3.1)** Implement `build_cache` in `src/data_loader.py`.
 2. **TODO(A3.2)** Use the cache inside `DRDataset.load`.
 3. **TODO(A3.3)** Build the cache in `make_loaders` when `data.cache_dir` is set.
-4. **TODO(A3.4)** `python -m pytest tests/test_data_pipeline.py -v` must pass.
 5. **TODO(A3.5)** **Predict, then measure** the loading stage with and without the cache (use
    `benchmarks/benchmark_stages.py`). Separate three situations: first run (cache is built),
    warm cache, and cold operating-system file cache. Report the cache size in MB and compare it
@@ -252,15 +251,12 @@ matches the reflect border of the OpenCV reference.
 7. **TODO(A5.8)** Write a small loop (or script) and tune `num_workers` and `batch_size` on your machine: sweep 0, 1, 2, 4, 8
    workers, 3 repeats each, and plot images per second. Where does adding workers stop helping,
    and what limits you (CPU cores, disk, RAM, the GPU)?
-8. **TODO(A5.9)** Compare **precomputed** preprocessing (store the final float tensors) with **on-the-fly GPU**
    preprocessing. Count storage and memory for both and decide, with numbers. Ask the same question for
    augmentation (Module D): fixed augmented copies on disk, or random augmentation on the fly?
-9. **TODO(A5.10)** Reduce transfers: how many bytes cross the PCIe bus per epoch with CPU preprocessing (float32
    after preprocessing) and with GPU preprocessing (uint8 before)?
 
 **Deliverable:** optimized input pipeline and end-to-end throughput measurements.
 
-**TODO(A5.11)** **Checkpoint questions**
 - Why does `non_blocking=True` do nothing useful for a tensor in pageable memory?
 - You doubled `num_workers` and nothing changed. Name three possible reasons and one measurement
   for each.
