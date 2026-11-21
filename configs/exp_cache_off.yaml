@@ -1,0 +1,32 @@
+# A7.6 ablation: exp_cache_off
+# configs/optimized.yaml with ONE optimization switched off: the decoded-image cache (A3).
+# One change: data.cache_dir: data/cache -> none
+# Measure steady-state epoch time and val macro-F1, same protocol as optimized.yaml (P1, RTX 3050).
+seed: 42
+data:
+  split_seed: 42            # fixed: identical train/val/test images in every run
+  root: data/dr_dataset
+  image_size: [224, 224]
+  num_classes: 5
+  train_frac: 0.70
+  val_frac: 0.15
+  batch_size: 32            # TODO(A6.7): update after P1's batch-size tuning
+  num_workers: 2            # TODO(A5.8): update after P1's workers sweep
+  prefetch_factor: 2        # A5.1: batches each worker keeps ready
+  prefetch_gpu: true        # A5.2, A5.5: overlap the host-to-device copy with compute
+preprocess:
+  gpu: true                 # A4, A5.3: batched preprocessing on the GPU, uint8 copy (A4.14)
+  clahe: true
+  circular_crop: true
+  normalize: true
+  gamma: 1.0
+  augment: false            # same as the baseline
+train:
+  model: reference_cnn      # same model as the baseline (speed comparison)
+  epochs: 5
+  lr: 0.001
+  amp: true                 # A6.1: mixed precision
+  channels_last: true       # A6.2: measured with AMP: 1.75x on Colab (P3)
+  compile: false            # A6.3: torch.compile needs Triton, not available on Windows
+  weight_decay: 0.0
+  label_smoothing: 0.0
