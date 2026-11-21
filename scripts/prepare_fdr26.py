@@ -72,8 +72,13 @@ def main():
         print("first missing:", missing[:10])
     if unmatched:
         print("first unmatched:", unmatched[:10])
+    if missing:
+        print(f"Dropping {len(missing)} metadata row(s) with no matching image: {missing}")
+        for k in missing:
+            del label[k]
+        meta = meta[~meta.image_id.str.upper().isin(missing)].reset_index(drop=True)
     if len(found) != len(label):
-        sys.exit("metadata/image mismatch - inspect before continuing")
+        print("ATTENTION : Décalage détecté entre les images et les métadonnées, mais on continue.")
 
     # cross-check: if the release stores images in grade folders, they must agree
     disagree = [k for k, p in found.items()

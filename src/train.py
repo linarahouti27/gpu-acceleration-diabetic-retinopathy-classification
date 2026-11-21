@@ -21,24 +21,17 @@ def macro_f1(conf):
     return (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean().item()
 
 
-def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
+def run_epoch(model, loader, criterion, device, optimizer=None, conf=None,
+              gpu_pre=None, scaler=None, amp=False, channels_last=False):
     """One pass over `loader`. Returns (mean loss, accuracy, n_images).
     If `conf` (a (C, C) long tensor on `device`) is given, it is updated in place with the
     confusion matrix, so the caller can compute macro-F1 with `macro_f1`.
 
-    TODO(A6.1): add mixed precision. New parameters: scaler, amp.
-        Wrap the forward pass and the loss in torch.autocast(device.type, enabled=amp)
-        and replace backward/step with the GradScaler pattern
-        (scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()).
-    TODO(A6.2): add `channels_last` (convert the input batch with
-        x.contiguous(memory_format=torch.channels_last)).
-    TODO(A5.3): add `gpu_pre`, a callable(uint8 batch) -> preprocessed NCHW tensor on
-        `device`. When it is given, use it instead of x.to(device).
-    TODO(A5.4): make host-device copies asynchronous: x.to(device, non_blocking=True).
-        Then explain in the report why this only helps with pinned memory.
-    TODO(A2.2): the loss and accuracy are accumulated on the device so that the host
-        waits once per epoch. Find the line in the loop that would force a sync on every
-        batch if it were written differently, and explain it in a comment.
+    gpu_pre: optional callable(uint8 batch) -> preprocessed NCHW tensor on `device`;
+        when given, it replaces x.to(device).
+    scaler: optional torch.amp.GradScaler for mixed-precision training (A6.1).
+    amp: whether automatic mixed precision (torch.autocast) is enabled (A6.1).
+    channels_last: whether to convert input batches to NHWC memory format (A6.2).
     """
     train = optimizer is not None
     model.train() if train else model.eval()
@@ -46,15 +39,33 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
     correct = torch.zeros((), device=device, dtype=torch.long)
     total = 0
     with torch.enable_grad() if train else torch.no_grad():
+        # A2.2: loss_sum and correct stay on the GPU as tensors, so the host never
+        # waits inside the loop. The line that would sync on EVERY batch if
+        # rewritten is `loss_sum += loss.detach().float() * x.size(0)`: with
+        # `loss.item() * ...` (or .cpu(), float(loss), print(loss)) the CPU would
+        # block until all queued CUDA work finishes, which kills the overlap with
+        # the next batch's copy. `total += x.size(0)` is safe: size() is host-side
+        # metadata. The only .item() calls are after the loop: one wait per epoch.
         for x, y in loader:
-            y = y.to(device)
-            x = x.to(device)
-            logits = model(x)
-            loss = criterion(logits, y)
+            y = y.to(device, non_blocking=True)
+            if gpu_pre is not None:
+                x = gpu_pre(x)  # uint8 host batch -> preprocessed NCHW on device
+            else:
+                x = x.to(device, non_blocking=True)
+            if channels_last:
+                x = x.contiguous(memory_format=torch.channels_last)
+            with torch.autocast(device.type, enabled=amp):
+                logits = model(x)
+                loss = criterion(logits, y)
             if train:
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
             loss_sum += loss.detach().float() * x.size(0)
             pred = logits.argmax(1)
             correct += (pred == y).sum()
@@ -66,18 +77,16 @@ def run_epoch(model, loader, criterion, device, optimizer=None, conf=None):
 
 
 def resolve_gpu_preprocess(cfg, device, override=None):
-    """TODO(A5.3): return True when GPU preprocessing should be used: the config flag
-    cfg["preprocess"]["gpu"] (or `override` when it is not None) AND device.type == "cuda".
-    """
-    return False
+    """True when GPU preprocessing is requested (config flag or override) and the device is CUDA."""
+    flag = override if override is not None else cfg["preprocess"].get("gpu", False)
+    return bool(flag) and device.type == "cuda"
 
 
 def make_gpu_pre(cfg, device, augment):
-    """TODO(A5.3): return a callable(batch) -> preprocessed tensor on `device`, built on
-    src.preprocess_gpu.preprocess_batch_gpu with the given `augment` flag.
-    (A lambda is fine here: it is used in the main process, not in DataLoader workers.)
-    """
-    raise NotImplementedError("TODO(A5.3): make_gpu_pre")
+    """Return a callable(uint8 batch) -> preprocessed NCHW tensor on `device`.
+    A lambda is fine: it is used in the main process, not in DataLoader workers."""
+    from src.preprocess_gpu import preprocess_batch_gpu
+    return lambda batch: preprocess_batch_gpu(batch, cfg, augment=augment, device=device)
 
 
 def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
@@ -91,25 +100,33 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     device = torch.device(device_str)
     gpu_pre_on = resolve_gpu_preprocess(cfg, device, gpu_preprocess)
     augment = bool(cfg["preprocess"].get("augment", False))
-    # TODO(A6.1): amp = cfg["train"].get("amp", False) and device.type == "cuda"; create a
-    #             torch.amp.GradScaler("cuda", enabled=amp) and pass both to run_epoch.
-    # TODO(A6.2): read cfg["train"].get("channels_last", False); convert the model with
-    #             model.to(memory_format=torch.channels_last) and pass the flag to run_epoch.
-    # TODO(A6.3, optional): read cfg["train"].get("compile", False); when true on CUDA, train through
-    #             torch.compile(model) but save the state_dict of the ORIGINAL model so
-    #             checkpoint keys stay clean. Record the cold-epoch cost in the report.
-    #             torch.compile needs Triton (Linux). On Windows skip it and say so in the report.
-    # TODO(A5.3): when gpu_pre_on, build TWO callables: make_gpu_pre(cfg, device, augment=augment)
-    #             for the train loop and make_gpu_pre(cfg, device, augment=False) for validation.
-    # TODO(A5.5): read cfg["data"].get("prefetch_gpu", False); when true on CUDA, wrap every loader
-    #             in src.prefetcher.CudaPrefetcher(loader, device).
+    gpu_pre_train = make_gpu_pre(cfg, device, augment=augment) if gpu_pre_on else None
+    gpu_pre_val = make_gpu_pre(cfg, device, augment=False) if gpu_pre_on else None
+
+    # A6.1: Automatic Mixed Precision (AMP) and GradScaler
+    amp = bool(cfg["train"].get("amp", False)) and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=amp)
+
+    # A6.2: channels_last memory format
+    channels_last = bool(cfg["train"].get("channels_last", False))
+
+    # A6.3: optional torch.compile (requires Triton on Linux + CUDA; skipped on Windows)
+    use_compile = bool(cfg["train"].get("compile", False)) and device.type == "cuda" and os.name != "nt"
 
     loaders, splits = make_loaders(cfg, device.type, gpu_preprocess=gpu_pre_on, which=("train", "val"))
+    if cfg["data"].get("prefetch_gpu", False) and device.type == "cuda":
+        from src.prefetcher import CudaPrefetcher
+        loaders = {k: CudaPrefetcher(v, device) for k, v in loaders.items()}
     split_sizes = {k: len(v) for k, v in splits.items()}
     print(f"[train:{run}] device={device} gpu_preprocess={gpu_pre_on} "
-          f"augment={augment} splits={split_sizes}", flush=True)
+          f"augment={augment} amp={amp} channels_last={channels_last} "
+          f"compile={use_compile} splits={split_sizes}", flush=True)
 
     model = build_model(cfg["train"]["model"], cfg["data"]["num_classes"]).to(device)
+    if channels_last:
+        model = model.to(memory_format=torch.channels_last)
+    run_model = torch.compile(model) if use_compile else model
+
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["train"]["lr"],
                             weight_decay=cfg["train"].get("weight_decay", 0.0))
     sched = None
@@ -132,11 +149,17 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
                 torch.cuda.reset_peak_memory_stats(device)
             # A5.3, A6.1, A6.2: pass gpu_pre, scaler, amp and channels_last to both run_epoch calls
             with GpuTimer(device) as ttr:
-                tr_loss, tr_acc, n_tr = run_epoch(model, loaders["train"], crit, device, opt)
+                tr_loss, tr_acc, n_tr = run_epoch(
+                    run_model, loaders["train"], crit, device, opt,
+                    gpu_pre=gpu_pre_train, scaler=scaler, amp=amp, channels_last=channels_last
+                )
             conf = torch.zeros(cfg["data"]["num_classes"], cfg["data"]["num_classes"],
                                dtype=torch.long, device=device)
             with GpuTimer(device) as tva:
-                va_loss, va_acc, n_va = run_epoch(model, loaders["val"], crit, device, conf=conf)
+                va_loss, va_acc, n_va = run_epoch(
+                    run_model, loaders["val"], crit, device, conf=conf,
+                    gpu_pre=gpu_pre_val, amp=amp, channels_last=channels_last
+                )
             va_f1 = macro_f1(conf)
             if sched is not None:
                 sched.step()
@@ -153,6 +176,7 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
                   f"({n_tr / ttr.elapsed:.0f} img/s)", flush=True)
             if va_acc > best_val:          # model selection on VAL only, never on test
                 best_val = va_acc
+                # Save original uncompiled model.state_dict() so checkpoint keys stay clean (A6.3)
                 torch.save({"model": model.state_dict(), "cfg": cfg, "val_acc": va_acc,
                             "epoch": epoch}, os.path.join(ckpt_dir, "best.pt"))
     finally:
@@ -163,8 +187,9 @@ def main(cfg_path, device_str, run=None, gpu_preprocess=None, epochs=None,
     epoch_times = [h["train_time_s"] + h["val_time_s"] for h in history]
     steady = epoch_times[1:] or epoch_times
     save_json({"run": run, "config": cfg_path, "cfg": cfg, "device": device_str,
-               "gpu_preprocess": gpu_pre_on, "augment": augment, "splits": split_sizes,
-               "setup_time_s": setup_s, "wall_time_s": wall_s,
+               "gpu_preprocess": gpu_pre_on, "augment": augment,
+               "amp": amp, "channels_last": channels_last, "compile": use_compile,
+               "splits": split_sizes, "setup_time_s": setup_s, "wall_time_s": wall_s,
                "cold_epoch_s": epoch_times[0], "steady_epoch_s": sum(steady) / len(steady),
                "best_val_acc": best_val, "history": history},
               os.path.join(out_dir, "history.json"))

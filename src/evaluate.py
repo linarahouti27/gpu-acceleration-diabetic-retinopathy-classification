@@ -29,23 +29,33 @@ def main(cfg_path, run=None, device_str="cpu", gpu_preprocess=None, checkpoint=N
     if ckpt["cfg"]["train"]["model"] != cfg["train"]["model"]:
         raise ValueError(f"checkpoint model {ckpt['cfg']['train']['model']} != "
                          f"config model {cfg['train']['model']}")
+
+    # Match precision (AMP) and memory layout (channels_last) used during training (A6.4)
+    train_cfg = cfg.get("train", {})
+    ckpt_train_cfg = ckpt.get("cfg", {}).get("train", {})
+    amp = bool(train_cfg.get("amp", ckpt_train_cfg.get("amp", False))) and device.type == "cuda"
+    channels_last = bool(train_cfg.get("channels_last", ckpt_train_cfg.get("channels_last", False)))
+
     model = build_model(cfg["train"]["model"], cfg["data"]["num_classes"]).to(device)
+    if channels_last:
+        model = model.to(memory_format=torch.channels_last)
     model.load_state_dict(ckpt["model"])
     model.eval()
 
     ys, ps = [], []
-    # TODO(A6.4): evaluate with the same precision and memory format as training
-    #             (torch.autocast, channels_last) and use `pre` when GPU preprocessing is on.
-    #             Explain in the report why inference time and training time must not be mixed up.
     with torch.no_grad(), GpuTimer(device) as t:
         for x, y in loaders["test"]:
-            x = pre(x) if pre is not None else x.to(device)
-            logits = model(x)
+            x = pre(x) if pre is not None else x.to(device, non_blocking=True)
+            if channels_last:
+                x = x.contiguous(memory_format=torch.channels_last)
+            with torch.autocast(device.type, enabled=amp):
+                logits = model(x)
             ys.extend(y.tolist())
             ps.extend(logits.argmax(1).cpu().tolist())
     labels = list(range(cfg["data"]["num_classes"]))
     metrics = {
         "run": run, "config": cfg_path, "checkpoint": checkpoint, "device": device_str,
+        "amp": amp, "channels_last": channels_last,
         "checkpoint_epoch": ckpt.get("epoch"), "val_acc": ckpt.get("val_acc"),
         "n_test": len(ys),
         "accuracy": accuracy_score(ys, ps),
