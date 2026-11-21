@@ -632,8 +632,8 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `8960169` (after two fixes, see Explanation).
 - **Question:** during steady-state training of the unoptimized baseline, what fraction of the time is the GPU idle, and how much of its busy time is host-to-device copies?
 - **Prediction:** a batch of 32 arrives about every 1,900 ms (about 17 img/s); one training step of the reference CNN is about 100 GFLOPs, about 33 ms on a T4 (about 3,000 GFLOP/s in practice). So the GPU idle fraction should be about 0.98. Copies should be a small part of the busy time (about 4 ms of copy per batch from A4.14, vs about 33 ms of kernels: about 10%).
-- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps). `trace.json` is not committed (`.gitignore`: large file).
-- **Result:** DRAFT on Colab T4 (`results/torch_profiler_baseline/summary.json`):
+- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps; files later moved to `results/colab_t4/torch_profiler_baseline/`). `trace.json` is not committed (`.gitignore`: large file).
+- **Result:** DRAFT on Colab T4 (`results/colab_t4/torch_profiler_baseline/summary.json`):
 
   | | Prediction | Measured, per step |
   |---|---|---|
