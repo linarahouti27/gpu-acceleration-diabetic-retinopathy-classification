@@ -1,6 +1,6 @@
 # Final model (A6.9, A6.10): configs/optimized.yaml (all speed optimizations) + the best model
 # from the redesign experiments: ResNet-18 pretrained on ImageNet, lr 0.0001 (Colab drafts: val
-# macro-F1 0.55 vs 0.35 for the reference CNN, results/exp_resnet18_lr1e-4/).
+# macro-F1 0.55 vs 0.35 for the reference CNN, results/colab_t4/exp_resnet18_lr1e-4/).
 # Two changes vs optimized.yaml (model, lr) = the recipe tested as exp_resnet18 -> exp_resnet18_lr1e-4.
 # No augmentation: it halved the overfitting but did not improve val macro-F1 within 5 epochs.
 # Comparing optimized.yaml (reference CNN) with this file gives the model effect (A6.10), on the
