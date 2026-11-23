@@ -497,6 +497,50 @@ Decision:             Keep `clahe_gpu` in `preprocess_batch_gpu` for batched tra
   - **The gap depends on the hardware:** it is bigger on the laptop (4× vs 2×) because its CPU is faster (newer, 8 cores / 12 threads that OpenCV can use, vs 2 shared cores on Colab: 0.68 vs 1.10 ms at batch 128) and its GPU slower (the RTX 3050 Laptop has 20 SMs vs 40 for the T4, so about half as many threads at once: 2.91 vs 2.45 ms).
 - **Decision:** do not use this GPU median filter as is (it is not used in training anyway). To make it faster, fuse the steps into one custom kernel (Numba CUDA, A4.11): each thread reads its 25 neighbours directly and sorts them in registers, which removes the 25× copy. Tuning blocks / threads per block is a secondary improvement. Since the CPU–GPU balance depends on the machine, a speed-up measured on one machine cannot be generalized to another: the official comparison is the laptop's.
 
+
+### A4.13 Median filter: official sweep on the RTX 3050 laptop (P1: Fatima zahrae)   date: 2026-11-20
+Config / commit:      commit $commit
+Question:             At which batch size (1, 8, 32, 64, 128) is the GPU median filter faster per image than the CPU (OpenCV) one, if ever?
+Prediction:           None written by me before this run. P4's prediction (written before her Colab T4 draft): GPU slower at batch 1, then below the CPU at about batch 64.
+Command:              python benchmarks/sweep_median.py   (output: results/sweep_median.csv)
+Result:               ms per image, mean:
+                        batch   CPU (OpenCV)   GPU (PyTorch)   GPU / CPU
+                          1        0.469          4.399          9.4x
+                          8        0.675          3.691          5.5x
+                         32        0.773          2.914          3.8x
+                         64        0.712          2.911          4.1x
+                        128        0.680          2.911          4.3x
+                      GPU std at batch 8 is 0.59 ms (16 percent of the mean), so that point is noisy. No Numba column in this file.
+Prediction vs result: The first part of P4's prediction was right: the GPU time per image falls as the batch grows (4.399 to 2.911 ms, 34 percent lower) and is flat from batch 32 on. The second part was wrong: the GPU never overtakes the CPU. At batch 128 the CPU is about 4.3 times faster.
+Explanation:          The two versions do not do the same work. OpenCV medianBlur is a specialized algorithm for 8-bit images. The PyTorch version uses F.unfold, which copies each pixel's 25 neighbours into memory (25 times the input size), and torch.median then sorts those 25 values for every pixel. The extra memory traffic and generic sorting cost more than the GPU gains from parallelism. The flat curve from batch 32 means the GPU is already fully busy, so bigger batches cannot help.
+                      Compared with P4's Colab T4 draft: the GPU at batch 128 is 2.91 ms here against 2.44 ms on the T4 (about 19 percent slower). A possible reason is that this GPU has 20 SMs against 40 on the T4; I did not test it. The CPU is 0.68 ms here against 1.10 ms on Colab, whose CPU was shared.
+Decision:             Do not use this PyTorch median filter in the pipeline (it is not used in training anyway). The Numba column could not be produced on this machine (numba-cuda error with NumPy 2.5.4), so the fused-kernel comparison (A4.11) comes from P4's Colab run only.
+
+### A4.13 Prediction: CLAHE, GPU vs CPU across batch sizes (P1: Fatima Zahrae)   date: 2026-11-20
+Config / commit:      commit $commit
+Question:             At which batch size (1, 8, 32, 64, 128) is the GPU CLAHE (clahe_gpu) faster per image than the CPU (OpenCV) one, if ever?
+Prediction:           CPU: about 1.4 ms per image, roughly constant for every batch size. This comes from my baseline profile (CLAHE 3.01 s for 2116 images). cProfile adds some overhead, so the real value may be a bit lower.
+                      GPU, batch 1: slower than the CPU, about 1 to 3 ms per image. CLAHE is many small steps (RGB to Lab conversion, tile histograms, clipping, cumulative sums, interpolation), and each step pays a kernel launch and PyTorch call cost that nothing can share at batch 1.
+                      GPU, batch 8: about equal to the CPU or slightly faster (about 0.3 to 1.5 ms per image), because the fixed cost is shared by 8 images.
+                      GPU, batch 32 and above: faster than the CPU, about 0.1 to 0.5 ms per image, and flat from about batch 32 once the GPU is busy. So I expect the crossover between batch 1 and batch 8, and a final speedup of about 3 to 10 times at batch 128.
+                      Reason: unlike the median filter (which copies 25 times the input with unfold and sorts), CLAHE has no large intermediate copy. It uses a batched scatter_add for the histograms of all tiles of all images at once, and most steps are cheap per-pixel operations. A batch of 128 images is 128 x 3 x 224 x 224 x 4 bytes = 77 MB, which fits easily in the 6 GB of this GPU.
+                      Main risk: the GPU time per image may stay flat at a higher value than I expect, because the many small steps each need a synchronization-free but still separate kernel. In that case the GPU could be only slightly faster than the CPU, or even never faster, as happened with the median filter.
+Command:              python benchmarks/sweep_clahe.py --batch-sizes 1 8 32 64 128 --repeats 5 --out results/sweep_clahe.csv
+Result:               ms per image, mean (std), 5 repeats:
+                        batch   CPU (OpenCV)      GPU (clahe_gpu)     speedup
+                          1     1.804 (0.158)     3.543 (1.444)       0.51x
+                          8     1.450 (0.040)     0.629 (0.075)       2.31x
+                         32     1.141 (0.101)     0.331 (0.007)       3.44x
+                         64     1.521 (0.354)     0.311 (0.004)       4.89x
+                        128     1.344 (0.063)     0.298 (0.0005)      4.52x
+                      The GPU overtakes the CPU between batch 1 and batch 8 (batch 8 is the first tested size where it wins). Sizes 2 to 7 were not tested.
+Prediction vs result: Right: the crossover between batch 1 and 8; GPU time per image flat from about batch 32 (0.331 to 0.298 ms, only 10 percent lower from 32 to 128); speedup at batch 128 of 4.5x, inside my 3 to 10x range. CPU about 1.45 ms on average (1.14 to 1.80), close to the 1.4 ms I derived from the profile (3.01 s / 2116 images).
+                      Different: GPU at batch 1 was 3.54 ms, above my 1 to 3 ms range; at batch 8 it was 2.3x faster than the CPU, not about equal. The risk I wrote down (GPU never faster, as with the median filter) did not happen.
+Explanation:          At batch 1 the GPU pays a fixed cost for every call that nothing can share (many small steps, each with its own kernel launches). The GPU time per image falls 11.9 times from batch 1 to batch 128 (3.543 to 0.298 ms) as that cost is shared. A rough two-point estimate from my numbers (not a measurement): the time per batch is about 2 to 3 ms fixed plus about 0.23 to 0.28 ms per image, so at batch 128 the fixed part is only a few percent of the time. From about batch 32 the GPU is busy and the curve is flat.
+                      Compared with the median filter, which never won (GPU 4.3 times slower at batch 128): I did not read the code of clahe_gpu, but its docstring says pure PyTorch, and the median version copies 25 times the input with unfold and sorts. CLAHE does not appear to have that large copy, which would explain the different outcome.
+                      Noise: CPU std at batch 64 is 0.354 ms (23 percent of the mean), which is why the speedup at 64 (4.89) looks better than at 128 (4.52) while the GPU time is still falling. Do not read batch 64 as the best size.
+                      Amdahl: CLAHE is 1.8 percent of the baseline epoch (3.01 s of 167.7 s in my profile). With s = 4.5 the end-to-end gain is 1 / ((1 - 0.018) + 0.018 / 4.5) = 1.014x. The stage is much faster on the GPU, but it barely changes the whole epoch.
+Decision:             Use the GPU CLAHE with batches of 8 or more (32 or more for the best time per image) and keep the CPU for single images. The end-to-end gain from CLAHE alone is small; the larger gains come from the stages that dominate the profile.
 ### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
 
 <<<<<<< HEAD
