@@ -71,8 +71,6 @@ Decision:             <keep / drop the change, and what you do next>
 
 ## Entries
 ### A1.4 Data split verification (P1: Fatima Zahrae )          date: 2026-11-12
-
-<<<<<<< HEAD
 Config / commit:      configs/baseline.yaml, commit $commit
 Question:             Are the classes still balanced inside each split? Does any patient
                       appear in two splits?
@@ -299,28 +297,29 @@ The average execution time is approximately 2.2 ms per image. The analysis of th
 **Conclusion:**
 
 The main bottleneck of this CPU function comes from the color space conversions, which together account for approximately 54.8% of the total execution time. To optimize this pipeline on GPU (A4.3), it will be essential to perform CLAHE directly on the reconstructed luminance channel or avoid these expensive color space conversions.
-$name = "Your Name"
-$commit = git rev-parse --short HEAD
-Add-Content -Path docs\lab_notebook.md -Value @"
 
-### A3.5 Prediction: loading with and without the decoded-image cache (P1: fatima Zahrae)   date: 2026-11-16
+
+### A3.5 Result part 2: loading with the decoded-image cache (P1: Fatima Zahrae)   date: 2026-11-16
 Config / commit:      configs/baseline.yaml, commit $commit
-Question:             How much faster is the loading stage with the cache: first run, warm cache,
-                      cold OS cache? How big is the cache compared with the dataset?
-Prediction:           No cache: about 2490 ms for 64 images (38.9 ms per image), same as before.
-                      First run: slower, because all 2999 images must be decoded once to build the
-                      cache (2999 x 38.9 ms = about 117 s with one thread, less with threads).
-                      Warm cache: about 20 ms for 64 images (range 5 to 60 ms), about 100 times
-                      faster. Reason: no decoding, only 64 x 150528 bytes = 9.6 MB copied from RAM.
-                      Cold OS cache: about 2 to 3 times slower than warm (the file is read from
-                      the NVMe SSD) but still much faster than no cache.
-                      Cache size: about 451 MB (2999 x 224 x 224 x 3 bytes).
-                      Amdahl: loading is 63.5 percent of the baseline epoch, so even with free
-                      loading the end-to-end speedup is at most 2.74x.
-Result:               (fill in after the run)
-Prediction vs result: (fill in after the run)
-Explanation:          (fill in after the run)
-Decision:             (fill in after the run)
+Prediction:           see the entry "A3.5 Prediction" above (written before the cache runs).
+Command:              python benchmarks/bench_cache.py --mode full --n 64 --repeats 3 --out results/A35_cache.csv
+                      (train split only, 2116 images, cache folder outside the project)
+Result:               loading, no cache:  3480.1 ms +/- 295.3 for 64 images (54.4 ms per image, 18.4 img/s)
+                      first run (build):  27.02 s for 2116 images (78.3 img/s), one run
+                      reopen existing:    2.2 ms
+                      warm cache:         3.4 ms +/- 3.1 for 64 images (0.053 ms per image, 18866 img/s), 3 repeats
+                      cold OS cache:      not measured yet
+                      Speedup warm vs no cache: about 1000x (3.4801 s / 0.0034 s = 1024). The warm std is as big as the mean, so only the order of magnitude is reliable.
+                      Cache size: 318.5 MB (train split). Source train images on disk: 1214.2 MB. The cache is 3.8 times smaller (26 percent).
+Prediction vs result: No cache: predicted about 2490 ms. Measured 3480 ms here and 1959 ms with benchmark_stages in the same session, so the no-cache value moves a lot and my prediction was anchored on one noisy value.
+                      First run: predicted 15 to 40 s (that was for 2999 images). Measured 27.0 s for 2116 images, about 38 s if scaled to 2999: inside my range.
+                      Warm cache: predicted about 20 ms (range 5 to 60 ms), about 100x. Measured 3.4 ms, about 1000x: outside my range, faster than expected.
+                      Cache size: predicted about 451 MB. Measured 318.5 MB because this run builds only the train split (2116 images). Per image it matches: 318.5 MB / 2116 = 150528 bytes = 224 x 224 x 3. All three splits would be 318.5 + 64.0 + 68.9 = 451.4 MB (computed, not measured).
+Explanation:          Without the cache every image is read, decoded and resized at every epoch (about 54 ms each). The cache stores the already decoded 224x224x3 pixels in one memory-mapped file, so loading becomes a memory read of 150528 bytes per image. Building costs 27 s once, but a no-cache epoch spends about 115 s loading the 2116 train images (2116 x 54.4 ms), so the cache pays for itself in about a quarter of one epoch (27.0 / 115 = 0.23).
+                      Consistency check: the epoch profile gave 106.45 s of loading for 2116 images = 50.3 ms per image, close to the 54.4 ms measured here. benchmark_stages gave 30.6 ms per image (1959 ms) and I did not find why it is lower, so the comparison above uses numbers from one script only.
+Limitation:           Windows has no built-in command to clear the OS file cache, so the cold-cache case is not measured yet (see below). The cache folder (dr_cache_A35 in the user folder) is outside the project, so it is not committed.
+Decision:             Keep the cache. Loading is no longer the bottleneck: removing the 106.45 s of loading from the 167.7 s profile epoch leaves about 61.3 s, so the best possible end-to-end speedup is about 2.7x (an estimate from the profile, not measured). The next bottleneck is forward + backward (about 54 s). The real end-to-end gain is measured by training with data.cache_dir set (A7).
+
 
 
 ### A3.5 Result part 1: loading without the cache (P1: fatima zahrae)   date: 2026-11-19
