@@ -70,7 +70,113 @@ Decision:             <keep / drop the change, and what you do next>
   - *Evaluation (`src/evaluate.py`):* `main` (loads `best.pt`, runs final test-set inference under `torch.no_grad()` matching training precision/memory layout, and writes accuracy, macro P/R/F1, per-class metrics, confusion matrix, and inference throughput to `metrics.json`).
 
 ## Entries
+### A1.4 Data split verification (P1: Fatima Zahrae )          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit $commit
+Question:             Are the classes still balanced inside each split? Does any patient
+                      appear in two splits?
 
+Prediction:           (none written before the run)
+Command:              python check_split.py (the brief's script + an overlap test)
+Result:               split  images  patients   class 0 / 1 / 2 / 3 / 4
+                      train   2116     1342     343 / 489 / 418 / 453 / 413
+                      val      425      287      83 / 104 /  76 /  78 /  84
+                      test     458      289      78 / 108 /  89 / 101 /  82
+                      Shared patients: train & val = 0, train & test = 0, val & test = 0.
+                      Total: 2116 + 425 + 458 = 2999 images, as expected.
+Prediction vs result: -
+Explanation:          Balance: the full dataset is almost balanced (504 / 701 / 583 / 632 / 579).
+                      The share of each class stays close across the three splits (class 1:
+                      23.1% in train, 24.5% in val, 23.6% in test). The largest gaps are class 0
+                      (16.2% in train, 19.5% in val) and class 3 (21.4% in train, 18.4% in val),
+                      probably because val is small (425 images). The splits are comparable.
+                      Data leakage: no patient id is in two splits.
+                      Why patient-level: images of the same patient look alike (same person,
+                      same camera, same anatomy). With an image-level split, near-duplicates
+                      would be in both training and validation. The model could recognize the
+                      patient instead of learning the disease, and the validation accuracy
+                      would be too optimistic. With a patient-level split, it better estimates
+                      the performance on new patients. I did not measure by how much it would
+                      be inflated.
+Decision:             Keep this split for all comparisons (data.split_seed fixed).
+
+
+### A1.5 torch.backends.cudnn.benchmark setting (P1: Fatima zahrae)          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit $commit
+Question:             How should torch.backends.cudnn.benchmark be set for the baseline and for
+                      the benchmarks, and why?
+Prediction:           (none written before the decision)
+Command:              Select-String -Path src\*.py -Pattern "cudnn"
+Result:               The setting only matters on the GPU: it makes cuDNN try several
+                      convolution algorithms the first time it sees an input shape, then keep the
+                      fastest one.
+Prediction vs result: -
+Explanation:          Baseline (CPU): the baseline runs on the CPU, where cuDNN is not used, so
+                      the flag has no effect. Keep the default (False) so the baseline stays
+                      simple and reproducible.
+                      GPU benchmarks: use True, because the input shape is fixed (224x224, same
+                      batch size). Two precautions: (1) the first pass is slower because the
+                      algorithms are tested, so a warm-up is needed and the cold first epoch is
+                      reported separately; (2) the chosen algorithm can change between runs, so
+                      results are not always identical to the last bit. For correctness tests
+                      (CPU/GPU equivalence) use a tolerance or set it to False.
+                      A different last batch size triggers a new search, which is one more
+                      reason to use drop_last=True on the train loader.
+Decision:             False for the CPU baseline, True for the GPU benchmarks. The same value
+                      must be used in every comparison, and it is written in the config file.
+
+### A1.7 / A1.8 CPU baseline run (P1: Fatima Zahrae)          date: 2026-11-12
+Config / commit:      configs/baseline.yaml, commit dd9e6c7
+Question:             What are the validation accuracy and the time per epoch of the CPU baseline?
+Prediction:           (none written before the run)
+Command:              python src/train_cpu.py
+Result:               RTX 3050 laptop, CPU i5-13420H, charger plugged in, Best performance.
+                      5 epochs, best val_acc = 0.3859 (val_f1 at the last epoch = 0.3356),
+                      wall time = 564.4 s, about 23 img/s.
+                      train_time per epoch: 93.41, 93.55, 91.72, 90.65, 95.72 s.
+                      Steady epochs (1 to 4): mean 92.9 s +/- 2.2 s. Cold epoch (0): 93.41 s.
+                      setup_time_s = 2.515521000023 s
+Prediction vs result: -
+Explanation:          One-time costs: setup (2.52 s) and the cold first epoch. The first epoch is
+                      not slower than the others (93.41 s vs 92.9 s average), so there is no
+                      visible cold-start cost on CPU. Repeated cost: about 93 s per epoch, paid
+                      at every epoch.
+                      The 5 train_time values add up to 465 s but the wall time is 564 s. Setup
+                      explains only 2.5 s of the 99 s gap. The rest is probably validation after
+                      each epoch (about 19 s per epoch), not confirmed yet.
+Decision:             Keep this run as the baseline everything is compared against. Test set not
+                      used (evaluate.py is for A7).
+Add-Content -Path docs\lab_notebook.md -Value @"
+
+### A1.10 Checkpoint questions (P1: Fatima zahrae)          date: 2026-11-15
+Config / commit:      configs/baseline.yaml, commit $commit
+
+Q1. Which stages run once, and which run every epoch?
+  Run once:           listing the images and splitting by patient, building the model and the
+                      loaders. Measured setup_time_s = 2.52 s.
+  Run every epoch:    loading (decode + resize), preprocessing (circular crop, CLAHE,
+                      normalize), forward, backward, optimizer step, and the validation pass
+                      (val_acc is printed after every epoch). Loading is 63.5% of an epoch in
+                      the profile, because the baseline has no cache yet. Augmentation is off
+                      in the baseline (augment=False).
+  In the optimized design: decoding becomes a one-time cost thanks to the decoded-image cache
+  (A3).
+
+Q2. How many bytes does one batch occupy as uint8 and as float32 at 224x224?
+  One image has 224 x 224 x 3 = 150528 values.
+  uint8 (1 byte each):    150528 bytes per image.
+  float32 (4 bytes each): 602112 bytes per image.
+  With batch size $B:     uint8 = $u8 bytes ($u8mb MB), float32 = $f32 bytes ($f32mb MB).
+  float32 is always 4 times larger than uint8, so copying uint8 to the GPU and converting to
+  float32 there moves 4 times fewer bytes. This assumes 3 channels.
+
+Q3. What does drop_last=True on the train loader change in the throughput numbers?
+  With 2116 training images and batch size $B there are $full full batches. drop_last=True
+  removes the last incomplete batch, so $drop images are skipped in an epoch ($pct% of 2116).
+  The effect on images per second is tiny: it is at most about that percentage. All batches
+  have the same shape, which avoids a new cudnn.benchmark search and torch.compile
+  recompilation, and avoids a batch of size 1 for BatchNorm. If the shuffle changes each
+  epoch, the skipped images differ every epoch, so no image is lost for good.
+=======
 ### A5.9 Precomputed preprocessing vs on-the-fly GPU preprocessing (2026-11-13)
 
 - **Config / commit:** `configs/optimized.yaml` @ 0a084f8
@@ -155,6 +261,7 @@ print(f'GPU preprocessing: {gpu_bytes/1e9:.2f} GB/epoch over PCIe (4x less)')
 - **Explanation:** `build_cache` writes a memmap of shape (N, H, W, 3) uint8 named `cache_<md5>_<N>x<H>x<W>x3.uint8`. The md5 covers `"\n".join(paths) + "|WxH"`, so any path or size change produces a different filename and the fast path `if os.path.exists(path)` is not taken, forcing a rebuild. `test_cache_matches_direct_decode` (8/8 passing on `p2-loading`) confirms `cache[i] == DRDataset.load(i)` for every i, so the two decode paths agree byte-for-byte. The 4x PCIe reduction (uint8 vs float32) is the algorithmic reason the cache also helps the GPU path; see A5.10 for the byte count.
 - **Decision:** keep the cache. P1 runs A3.5 on the 3050 (no-cache vs first-run vs warm vs cold-OS); numbers go to `results/a3_cache_benchmark.csv` for the A8 figures. Move on to A5.2 (CudaPrefetcher).
 
+>>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8
 
 ### A2.3: Prediction of Time Distribution (CPU Baseline)
 
@@ -190,6 +297,40 @@ The average execution time is approximately 2.2 ms per image. The analysis of th
 **Conclusion:**
 
 The main bottleneck of this CPU function comes from the color space conversions, which together account for approximately 54.8% of the total execution time. To optimize this pipeline on GPU (A4.3), it will be essential to perform CLAHE directly on the reconstructed luminance channel or avoid these expensive color space conversions.
+
+
+### A3.5 Result part 2: loading with the decoded-image cache (P1: Fatima Zahrae)   date: 2026-11-16
+Config / commit:      configs/baseline.yaml, commit $commit
+Prediction:           see the entry "A3.5 Prediction" above (written before the cache runs).
+Command:              python benchmarks/bench_cache.py --mode full --n 64 --repeats 3 --out results/A35_cache.csv
+                      (train split only, 2116 images, cache folder outside the project)
+Result:               loading, no cache:  3480.1 ms +/- 295.3 for 64 images (54.4 ms per image, 18.4 img/s)
+                      first run (build):  27.02 s for 2116 images (78.3 img/s), one run
+                      reopen existing:    2.2 ms
+                      warm cache:         3.4 ms +/- 3.1 for 64 images (0.053 ms per image, 18866 img/s), 3 repeats
+                      cold OS cache:      not measured yet
+                      Speedup warm vs no cache: about 1000x (3.4801 s / 0.0034 s = 1024). The warm std is as big as the mean, so only the order of magnitude is reliable.
+                      Cache size: 318.5 MB (train split). Source train images on disk: 1214.2 MB. The cache is 3.8 times smaller (26 percent).
+Prediction vs result: No cache: predicted about 2490 ms. Measured 3480 ms here and 1959 ms with benchmark_stages in the same session, so the no-cache value moves a lot and my prediction was anchored on one noisy value.
+                      First run: predicted 15 to 40 s (that was for 2999 images). Measured 27.0 s for 2116 images, about 38 s if scaled to 2999: inside my range.
+                      Warm cache: predicted about 20 ms (range 5 to 60 ms), about 100x. Measured 3.4 ms, about 1000x: outside my range, faster than expected.
+                      Cache size: predicted about 451 MB. Measured 318.5 MB because this run builds only the train split (2116 images). Per image it matches: 318.5 MB / 2116 = 150528 bytes = 224 x 224 x 3. All three splits would be 318.5 + 64.0 + 68.9 = 451.4 MB (computed, not measured).
+Explanation:          Without the cache every image is read, decoded and resized at every epoch (about 54 ms each). The cache stores the already decoded 224x224x3 pixels in one memory-mapped file, so loading becomes a memory read of 150528 bytes per image. Building costs 27 s once, but a no-cache epoch spends about 115 s loading the 2116 train images (2116 x 54.4 ms), so the cache pays for itself in about a quarter of one epoch (27.0 / 115 = 0.23).
+                      Consistency check: the epoch profile gave 106.45 s of loading for 2116 images = 50.3 ms per image, close to the 54.4 ms measured here. benchmark_stages gave 30.6 ms per image (1959 ms) and I did not find why it is lower, so the comparison above uses numbers from one script only.
+Limitation:           Windows has no built-in command to clear the OS file cache, so the cold-cache case is not measured yet (see below). The cache folder (dr_cache_A35 in the user folder) is outside the project, so it is not committed.
+Decision:             Keep the cache. Loading is no longer the bottleneck: removing the 106.45 s of loading from the 167.7 s profile epoch leaves about 61.3 s, so the best possible end-to-end speedup is about 2.7x (an estimate from the profile, not measured). The next bottleneck is forward + backward (about 54 s). The real end-to-end gain is measured by training with data.cache_dir set (A7).
+
+
+
+### A3.5 Result part 1: loading without the cache (P1: fatima zahrae)   date: 2026-11-19
+Config / commit:      configs/baseline.yaml, commit $commit
+Command:              python benchmarks/benchmark_stages.py --config configs/baseline.yaml --n 64 --repeats 3 --out results/A35_nocache.csv
+Result:               loading (no cache) = 1959.5 ms +/- 27.6 for 64 images (30.6 ms per image, 32.7 img/s), 3 repeats.
+                      Same session: preprocessing 126.0 ms, train_step 1514.9 ms, inference 392.7 ms.
+                      Earlier run of 12 Nov (results/timing.csv): loading 2490.8 ms +/- 290.2.
+Prediction vs result: I predicted about 2490 ms (within 10 percent). Measured 1959 ms, 21 percent lower, outside my range.
+Explanation:          The 12 Nov run was noisier (std 290 ms against 27.6 ms now) and other stages also differ (preprocessing 214.7 vs 126.0 ms), so the machine conditions were not the same. I did not find the cause. The cache runs re-measure the no-cache case in the same session so the comparison is fair.
+Decision:             Compare the cache only with a no-cache measurement from the same session. Cache runs follow (part 2).
 
 ### A4.11 Second GPU median filter: fused custom Numba CUDA kernel (P4: Lina) — 2026-11-10
 
@@ -356,8 +497,107 @@ Decision:             Keep `clahe_gpu` in `preprocess_batch_gpu` for batched tra
   - **The gap depends on the hardware:** it is bigger on the laptop (4× vs 2×) because its CPU is faster (newer, 8 cores / 12 threads that OpenCV can use, vs 2 shared cores on Colab: 0.68 vs 1.10 ms at batch 128) and its GPU slower (the RTX 3050 Laptop has 20 SMs vs 40 for the T4, so about half as many threads at once: 2.91 vs 2.45 ms).
 - **Decision:** do not use this GPU median filter as is (it is not used in training anyway). To make it faster, fuse the steps into one custom kernel (Numba CUDA, A4.11): each thread reads its 25 neighbours directly and sorts them in registers, which removes the 25× copy. Tuning blocks / threads per block is a secondary improvement. Since the CPU–GPU balance depends on the machine, a speed-up measured on one machine cannot be generalized to another: the official comparison is the laptop's.
 
+
+### A4.13 Median filter: official sweep on the RTX 3050 laptop (P1: Fatima zahrae)   date: 2026-11-20
+Config / commit:      commit $commit
+Question:             At which batch size (1, 8, 32, 64, 128) is the GPU median filter faster per image than the CPU (OpenCV) one, if ever?
+Prediction:           None written by me before this run. P4's prediction (written before her Colab T4 draft): GPU slower at batch 1, then below the CPU at about batch 64.
+Command:              python benchmarks/sweep_median.py   (output: results/sweep_median.csv)
+Result:               ms per image, mean:
+                        batch   CPU (OpenCV)   GPU (PyTorch)   GPU / CPU
+                          1        0.469          4.399          9.4x
+                          8        0.675          3.691          5.5x
+                         32        0.773          2.914          3.8x
+                         64        0.712          2.911          4.1x
+                        128        0.680          2.911          4.3x
+                      GPU std at batch 8 is 0.59 ms (16 percent of the mean), so that point is noisy. No Numba column in this file.
+Prediction vs result: The first part of P4's prediction was right: the GPU time per image falls as the batch grows (4.399 to 2.911 ms, 34 percent lower) and is flat from batch 32 on. The second part was wrong: the GPU never overtakes the CPU. At batch 128 the CPU is about 4.3 times faster.
+Explanation:          The two versions do not do the same work. OpenCV medianBlur is a specialized algorithm for 8-bit images. The PyTorch version uses F.unfold, which copies each pixel's 25 neighbours into memory (25 times the input size), and torch.median then sorts those 25 values for every pixel. The extra memory traffic and generic sorting cost more than the GPU gains from parallelism. The flat curve from batch 32 means the GPU is already fully busy, so bigger batches cannot help.
+                      Compared with P4's Colab T4 draft: the GPU at batch 128 is 2.91 ms here against 2.44 ms on the T4 (about 19 percent slower). A possible reason is that this GPU has 20 SMs against 40 on the T4; I did not test it. The CPU is 0.68 ms here against 1.10 ms on Colab, whose CPU was shared.
+Decision:             Do not use this PyTorch median filter in the pipeline (it is not used in training anyway). The Numba column could not be produced on this machine (numba-cuda error with NumPy 2.5.4), so the fused-kernel comparison (A4.11) comes from P4's Colab run only.
+
+### A4.13 Prediction: CLAHE, GPU vs CPU across batch sizes (P1: Fatima Zahrae)   date: 2026-11-20
+Config / commit:      commit $commit
+Question:             At which batch size (1, 8, 32, 64, 128) is the GPU CLAHE (clahe_gpu) faster per image than the CPU (OpenCV) one, if ever?
+Prediction:           CPU: about 1.4 ms per image, roughly constant for every batch size. This comes from my baseline profile (CLAHE 3.01 s for 2116 images). cProfile adds some overhead, so the real value may be a bit lower.
+                      GPU, batch 1: slower than the CPU, about 1 to 3 ms per image. CLAHE is many small steps (RGB to Lab conversion, tile histograms, clipping, cumulative sums, interpolation), and each step pays a kernel launch and PyTorch call cost that nothing can share at batch 1.
+                      GPU, batch 8: about equal to the CPU or slightly faster (about 0.3 to 1.5 ms per image), because the fixed cost is shared by 8 images.
+                      GPU, batch 32 and above: faster than the CPU, about 0.1 to 0.5 ms per image, and flat from about batch 32 once the GPU is busy. So I expect the crossover between batch 1 and batch 8, and a final speedup of about 3 to 10 times at batch 128.
+                      Reason: unlike the median filter (which copies 25 times the input with unfold and sorts), CLAHE has no large intermediate copy. It uses a batched scatter_add for the histograms of all tiles of all images at once, and most steps are cheap per-pixel operations. A batch of 128 images is 128 x 3 x 224 x 224 x 4 bytes = 77 MB, which fits easily in the 6 GB of this GPU.
+                      Main risk: the GPU time per image may stay flat at a higher value than I expect, because the many small steps each need a synchronization-free but still separate kernel. In that case the GPU could be only slightly faster than the CPU, or even never faster, as happened with the median filter.
+Command:              python benchmarks/sweep_clahe.py --batch-sizes 1 8 32 64 128 --repeats 5 --out results/sweep_clahe.csv
+Result:               ms per image, mean (std), 5 repeats:
+                        batch   CPU (OpenCV)      GPU (clahe_gpu)     speedup
+                          1     1.804 (0.158)     3.543 (1.444)       0.51x
+                          8     1.450 (0.040)     0.629 (0.075)       2.31x
+                         32     1.141 (0.101)     0.331 (0.007)       3.44x
+                         64     1.521 (0.354)     0.311 (0.004)       4.89x
+                        128     1.344 (0.063)     0.298 (0.0005)      4.52x
+                      The GPU overtakes the CPU between batch 1 and batch 8 (batch 8 is the first tested size where it wins). Sizes 2 to 7 were not tested.
+Prediction vs result: Right: the crossover between batch 1 and 8; GPU time per image flat from about batch 32 (0.331 to 0.298 ms, only 10 percent lower from 32 to 128); speedup at batch 128 of 4.5x, inside my 3 to 10x range. CPU about 1.45 ms on average (1.14 to 1.80), close to the 1.4 ms I derived from the profile (3.01 s / 2116 images).
+                      Different: GPU at batch 1 was 3.54 ms, above my 1 to 3 ms range; at batch 8 it was 2.3x faster than the CPU, not about equal. The risk I wrote down (GPU never faster, as with the median filter) did not happen.
+Explanation:          At batch 1 the GPU pays a fixed cost for every call that nothing can share (many small steps, each with its own kernel launches). The GPU time per image falls 11.9 times from batch 1 to batch 128 (3.543 to 0.298 ms) as that cost is shared. A rough two-point estimate from my numbers (not a measurement): the time per batch is about 2 to 3 ms fixed plus about 0.23 to 0.28 ms per image, so at batch 128 the fixed part is only a few percent of the time. From about batch 32 the GPU is busy and the curve is flat.
+                      Compared with the median filter, which never won (GPU 4.3 times slower at batch 128): I did not read the code of clahe_gpu, but its docstring says pure PyTorch, and the median version copies 25 times the input with unfold and sorts. CLAHE does not appear to have that large copy, which would explain the different outcome.
+                      Noise: CPU std at batch 64 is 0.354 ms (23 percent of the mean), which is why the speedup at 64 (4.89) looks better than at 128 (4.52) while the GPU time is still falling. Do not read batch 64 as the best size.
+                      Amdahl: CLAHE is 1.8 percent of the baseline epoch (3.01 s of 167.7 s in my profile). With s = 4.5 the end-to-end gain is 1 / ((1 - 0.018) + 0.018 / 4.5) = 1.014x. The stage is much faster on the GPU, but it barely changes the whole epoch.
+Decision:             Use the GPU CLAHE with batches of 8 or more (32 or more for the best time per image) and keep the CPU for single images. The end-to-end gain from CLAHE alone is small; the larger gains come from the stages that dominate the profile.
 ### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
 
+<<<<<<< HEAD
+<<<<<<< HEAD
+
+
+### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: toutes)   date: 2026-11-12
+Question:             Rank by share of the baseline epoch time: loading, preprocessing (CLAHE, crop,
+                      normalize), forward, backward, optimizer step.
+Prediction:           1) backward  2) forward  3) loading  4) preprocessing  5) optimizer step
+                      Reason: the baseline runs on the CPU at only about 23 img/s (about 43 ms per
+                      image), which is slow, so I think the neural network computation dominates.
+                      The backward pass costs about twice the forward pass (it computes gradients
+                      for every layer), so it should come first. Loading (decoding large retina
+                      images every epoch) and preprocessing (CLAHE) come next, because nothing is
+                      cached yet. The optimizer step only updates the weights once per batch, so
+                      it should be the smallest.
+Command:              python benchmarks/profile_baseline.py
+                      python benchmarks/benchmark_stages.py --n 64
+Result:               Profile of 1 CPU epoch (workers=0 on purpose, cProfile), total 167.7 s:
+                        loading (decode+resize)   106.45 s   63.5 %
+                        backward                   29.60 s   17.6 %
+                        forward                    24.30 s   14.5 %
+                        preprocessing (total)       5.64 s    3.4 %  (CLAHE 3.01, crop 1.12, normalize 1.37)
+                        optimizer step              0.26 s    0.2 %
+                        other                       1.48 s    0.9 %
+                      Per-stage timing on 64 images (benchmark_stages.py, mean +/- std):
+                        loading         2490.8 +/- 290.2 ms  (25.7 img/s)
+                        preprocessing    214.7 +/-  17.6 ms
+                        train_step      1631.3 +/- 167.6 ms  (39.2 img/s)
+                        inference        413.4 +/-   9.7 ms
+Prediction vs result: Predicted: backward > forward > loading > preprocessing > optimizer.
+                      Measured: loading > backward > forward > preprocessing > optimizer.
+                      Right: preprocessing 4th, optimizer last, backward above forward.
+                      Wrong: loading. I put it 3rd, but it is 1st with 63.5 %, about twice
+                      forward + backward together (32.1 %).
+Explanation:          Loading decodes and resizes large retina images from disk, and the same
+                      images are decoded again at every epoch. It costs about 39 ms per image
+                      (benchmark) against about 25 ms per image for forward + backward
+                      (train_step). Consistency check: forward + backward in the profile is
+                      53.9 s for 2116 images = 25.5 ms per image, the same as the train_step
+                      benchmark (1631 ms / 64 = 25.5 ms). Preprocessing is small (CLAHE only
+                      3.0 s) and the optimizer step is tiny (it updates the weights once per
+                      batch). The profile epoch is slower (15 img/s) than the baseline run
+                      (23 img/s) because it uses no worker processes, so loading is not
+                      overlapped with compute, and cProfile adds some overhead. The shares
+                      above are for this serial version.
+                      Amdahl bound: loading p = 0.635 gives 1 / (1 - 0.635) = 2.74x at best.
+                      Backward p = 0.176 gives 1 / (1 - 0.176) = 1.21x at best.
+Decision:             Loading is the first target: build the decoded-image cache (A3). Even
+                      with free loading the end-to-end gain is at most 2.74x. Forward + backward
+                      (32 %, at best 1.47x alone) come second, with the GPU. Preprocessing
+                      (3.4 %, at best 1.04x) is not worth optimizing first. Re-profile after
+                      each change, because the shares will move.
+=======
+dd9e6c75b5b8280f1223d1815229da0d7efba42b
+=======
 - **Config / commit:** none (script defaults). Official run: `benchmarks/h2d_copy.py` at commit `a59a759` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/h2d_copy.csv`). Colab draft: same commit; its CSV was not committed, numbers below copied from the console output.
 - **Question:** how long does copying one batch of images from CPU memory to the GPU take as uint8 vs as float32? (The second part, how much of the GPU preprocessing time is the copy, needs P3's `preprocess_batch_gpu`.)
 - **Prediction:** uint8 should be about 4× faster to copy, because it has 4× fewer bytes to move (1 byte per value instead of 4).
@@ -381,6 +621,7 @@ Decision:             Keep `clahe_gpu` in `preprocess_batch_gpu` for batched tra
   - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
   - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
 - **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Second part of A4.14 (copy share of `preprocess_batch_gpu`, with P3's pipeline on Colab T4): at batch size 32, GPU preprocessing (`circular_crop_gpu` + `clahe_gpu` + `normalize_gpu`) takes ~5.25 ms per batch (~0.164 ms/image), while copying the pinned uint8 batch takes 0.427 ms, so the H2D copy accounts for only **~7.5%** of the total GPU preprocessing time (5.68 ms total), compared to **~43.8%** if copying unpinned float32 tensors (4.09 ms copy vs 5.25 ms compute).
+>>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8
 
 ### A4.16 Checkpoint questions (P3: Inès & P4: Lina)          date: 2026-11-11
 
@@ -660,6 +901,9 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Prediction:** not recorded. A2.3 was skipped for lack of time, so no prediction was written before profiling. The ranking below is therefore after the fact.
 - **Command:** Amdahl bound `S_max = 1 / (1 - p)`, computed from the `fractions` field of `profile_stages.json`.
 
+<<<<<<< HEAD
+>>>>>>> f39cf0ba7141500bc6b4af05b87c49f21deec50f
+=======
 **Result:**
 
 | Stage | Share of total time |
@@ -687,3 +931,4 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Prediction vs result:** not applicable, since no prediction was recorded beforehand. The profile shows loading (decode+resize) as the largest stage at 63.5%, backward second at 17.6%. CLAHE is only 1.8%, so the filters are not the bottleneck.
 - **Explanation:** data loading (JPEG decode + resize) dominates at 63.5%: in the baseline it runs on the CPU for every image at every epoch, while the GPU-side work (forward + backward) is only 32.1%. Optimising loading alone cannot exceed 2.74x; the bound for backward alone is only 1.21x. Preprocessing is only 3.4%, so moving it to the GPU gives at most 1.03x by itself. These bounds are ceilings: real gains are lower because no stage becomes free (a cache still reads from disk, for example).
 - **Decision:** attack loading first (A3 decoded-image cache, A5 DataLoader options and prefetching). Once loading is reduced, forward + backward become the next bottleneck, with a ceiling of 1.47x on the baseline. GPU preprocessing is kept for its transfer and CPU-offload benefits, not for its own share.
+>>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8

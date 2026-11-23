@@ -1,0 +1,2 @@
+stage,device,mean_s,std_s,n_images,imgs_per_s
+loading_cache_cold,cpu,0.01199619999999868,0.0,64,5335.022757207035
