@@ -268,6 +268,27 @@ print(f'GPU preprocessing: {gpu_bytes/1e9:.2f} GB/epoch over PCIe (4x less)')
 - **Prediction:** Preprocessing (CLAHE, cropping, and normalization) is expected to account for the largest share of the execution time per epoch, due to CPU color space conversions and the initial absence of caching.
 - **Justification:** Sequential OpenCV operations block the pipeline before the forward pass even begins.
 
+### A2.5 Per-stage CPU times on the same 64 images (P1: fatima zahrae)   date: 2026-11-20
+Config / commit:      configs/baseline.yaml, commit $commit
+Question:             How long does each stage take on the same 64 images (CPU), and which stage is the largest?
+Prediction:           see the entry "A2.3 Prediction" (ranking written before the run).
+Command:              run 1 (12 Nov): python benchmarks/benchmark_stages.py --n 64   (results/timing.csv)
+                      run 2 (19 Nov): python benchmarks/benchmark_stages.py --config configs/baseline.yaml --n 64 --repeats 3 --out results/A35_nocache.csv
+Result:               mean ms for 64 images (std), then ms per image:
+                        stage             run 1 (12 Nov)           run 2 (19 Nov)         change
+                        loading           2490.8 (290.2)  38.9     1959.5 (27.6)   30.6    -21%
+                        preprocessing      214.7 (17.6)    3.35     126.0 (3.9)     1.97   -41%
+                        filter_gaussian     21.7 (4.0)     0.34      16.3 (0.6)     0.25   -25%
+                        filter_median       44.7 (3.5)     0.70      40.0 (0.7)     0.62   -11%
+                        filter_green         6.8 (0.3)     0.11       6.1 (0.8)     0.09   -11%
+                        filter_contrast    132.0 (17.6)    2.06     111.6 (4.0)     1.74   -15%
+                        augmentation        27.8 (1.5)     0.43      20.0 (0.8)     0.31   -28%
+                        train_step        1631.3 (167.6)  25.5     1514.9 (119.6)  23.7     -7%
+                        inference          413.4 (9.7)     6.46     392.7 (9.4)     6.14    -5%
+                      Other measurements of loading per image: epoch profile 50.3 ms (106.45 s / 2116 images, cProfile overhead); bench_cache.py no-cache case 54.4 ms.
+Prediction vs result: Loading is the largest stage in both runs (38.9 and 30.6 ms per image), above train_step (25.5 and 23.7), which agrees with the epoch profile (loading 63.5 percent). train_step is forward + backward + optimizer together, so it cannot be compared one to one with my A2.3 ranking, which put loading third and was wrong.
+Explanation:          All nine stages are faster in run 2 (5 to 41 percent) and the spread is much smaller, which points to different machine conditions or code rather than to one stage. benchmark_stages.py was updated by git pull between the two runs, so a code change is one possible cause; I did not check, and I did not find the cause. The ranking is the same in both runs, so it is reliable; the exact milliseconds are not. Loading per image also varies across tools (30.6 to 54.4 ms), so the report must say which measurement each number comes from.
+Decision:             Loading is the first target in every measurement. Use one run consistently in the report (run 2 has the smaller spread) and state it. The Amdahl bound for the top two stages is A2.6.
 ### A2.7: Fine-Grained Profiling with line_profiler
 
 - **Result:** Profiling the `apply_clahe` function revealed that color space conversions account for a significant proportion of its execution time.
