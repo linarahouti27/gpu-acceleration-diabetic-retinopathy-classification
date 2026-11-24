@@ -176,7 +176,6 @@ Q3. What does drop_last=True on the train loader change in the throughput number
   have the same shape, which avoids a new cudnn.benchmark search and torch.compile
   recompilation, and avoids a batch of size 1 for BatchNorm. If the shuffle changes each
   epoch, the skipped images differ every epoch, so no image is lost for good.
-=======
 ### A5.9 Precomputed preprocessing vs on-the-fly GPU preprocessing (2026-11-13)
 
 - **Config / commit:** `configs/optimized.yaml` @ 0a084f8
@@ -261,7 +260,6 @@ print(f'GPU preprocessing: {gpu_bytes/1e9:.2f} GB/epoch over PCIe (4x less)')
 - **Explanation:** `build_cache` writes a memmap of shape (N, H, W, 3) uint8 named `cache_<md5>_<N>x<H>x<W>x3.uint8`. The md5 covers `"\n".join(paths) + "|WxH"`, so any path or size change produces a different filename and the fast path `if os.path.exists(path)` is not taken, forcing a rebuild. `test_cache_matches_direct_decode` (8/8 passing on `p2-loading`) confirms `cache[i] == DRDataset.load(i)` for every i, so the two decode paths agree byte-for-byte. The 4x PCIe reduction (uint8 vs float32) is the algorithmic reason the cache also helps the GPU path; see A5.10 for the byte count.
 - **Decision:** keep the cache. P1 runs A3.5 on the 3050 (no-cache vs first-run vs warm vs cold-OS); numbers go to `results/a3_cache_benchmark.csv` for the A8 figures. Move on to A5.2 (CudaPrefetcher).
 
->>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8
 
 ### A2.3: Prediction of Time Distribution (CPU Baseline)
 
@@ -342,7 +340,6 @@ Limitation:           Windows has no built-in command to clear the OS file cache
 Decision:             Keep the cache. Loading is no longer the bottleneck: removing the 106.45 s of loading from the 167.7 s profile epoch leaves about 61.3 s, so the best possible end-to-end speedup is about 2.7x (an estimate from the profile, not measured). The next bottleneck is forward + backward (about 54 s). The real end-to-end gain is measured by training with data.cache_dir set (A7).
 
 
-
 ### A3.5 Result part 1: loading without the cache (P1: fatima zahrae)   date: 2026-11-19
 Config / commit:      configs/baseline.yaml, commit $commit
 Command:              python benchmarks/benchmark_stages.py --config configs/baseline.yaml --n 64 --repeats 3 --out results/A35_nocache.csv
@@ -376,7 +373,9 @@ Decision:             Compare the cache only with a no-cache measurement from th
   - **Implementation** (`src/filters_numba.py`, wrapper `filters_gpu.median_filter_numba`): one thread per output pixel, 16×16 blocks, one grid layer (`blockIdx.z`) per image-channel slice. Each thread reads its 5×5 neighbours with coordinates clamped to the image (= replicate padding), sorts them in a private `cuda.local.array` (insertion sort) and writes the middle value. Window fixed at 5×5.
   - **Why it is faster:** fusion avoids the 25× memory copy. Each thread reads its neighbours straight into its private array, instead of `F.unfold` writing a 25× larger tensor to GPU memory and `torch.median` reading it back, and there is one kernel launch instead of three. Same GPU and same idea (sort 25 values per pixel), so the gain comes from less memory traffic. The GPU is saturated from batch 8 on (flat curve), earlier than the PyTorch version (batch 32), since there is less work per image. It wins over OpenCV despite using a simple insertion sort.
 - **Decision:** the fused kernel is the GPU median filter worth keeping. The median filter is not used in training, so this does not speed up the pipeline itself; it shows why kernel fusion matters. Possible next step: a faster sort (e.g. only partially sorting up to the 13th value). Re-run on P1's RTX 3050.
-- **Prediction for the official rerun (P1, RTX 3050 laptop, with Numba installed), written before it:** the Numba kernel won't be much faster than the laptop's CPU, maybe about a tie, because the laptop's CPU is newer and has more cores than Colab's (OpenCV: 0.68 vs 1.10 ms at batch 128) while its GPU has half the SMs (the PyTorch median is about 19% slower on it: 2.91 vs 2.45 ms; the same slowdown would put Numba at about 0.65 ms vs OpenCV 0.68 ms).
+- **Official run on the RTX 3050 laptop (P1): not possible.** P1's environment (Python 3.12.10, NumPy 2.5.4, torch 2.11.0+cu128, numba 0.68.1, numba-cuda 0.30.4, the newest available): with only `numba`, the old built-in CUDA target failed to compile the kernel (`Signature mismatch` while typing a built-in function); with `numba-cuda`, it failed while loading, because it refers to `np.row_stack`, removed from NumPy 2.5. NumPy was not downgraded, since all the official measurements use it. A compatibility patch was added to `src/filters_numba.py` (commit `b04d6e9`: put back `np.row_stack = np.vstack` when missing), but the following run on the laptop still had no Numba column, and its other timings were much slower than the first official run (different laptop conditions), so it was discarded and the first run restored. **The A4.11 results therefore come from Colab only.**
+- **Prediction for the official rerun, written before it (not testable):** the Numba kernel won't be much faster than the laptop's CPU, maybe about a tie, because the laptop's CPU is newer and has more cores than Colab's (OpenCV: 0.68 vs 1.10 ms at batch 128) while its GPU has half the SMs (the PyTorch median is about 19% slower on it: 2.91 vs 2.45 ms; the same slowdown would put Numba at about 0.65 ms vs OpenCV 0.68 ms).
+- **Known compatibility issue (for the README, A8.8):** custom Numba CUDA kernels need a `numba-cuda` version compatible with the installed NumPy; numba-cuda 0.30.4 does not support NumPy 2.5 without the patch.
 
 ### A4.12 Preprocessing test tolerances (P3: Inès)          date: 2026-11-11
 Scope:            the six preprocessing tests in `tests/test_cpu_gpu_equivalence.py` (the filter
@@ -562,10 +561,6 @@ Explanation:          At batch 1 the GPU pays a fixed cost for every call that n
                       Noise: CPU std at batch 64 is 0.354 ms (23 percent of the mean), which is why the speedup at 64 (4.89) looks better than at 128 (4.52) while the GPU time is still falling. Do not read batch 64 as the best size.
                       Amdahl: CLAHE is 1.8 percent of the baseline epoch (3.01 s of 167.7 s in my profile). With s = 4.5 the end-to-end gain is 1 / ((1 - 0.018) + 0.018 / 4.5) = 1.014x. The stage is much faster on the GPU, but it barely changes the whole epoch.
 Decision:             Use the GPU CLAHE with batches of 8 or more (32 or more for the best time per image) and keep the CPU for single images. The end-to-end gain from CLAHE alone is small; the larger gains come from the stages that dominate the profile.
-### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
-
-<<<<<<< HEAD
-<<<<<<< HEAD
 
 
 ### A2.3 Prediction: which stage takes the most time in a baseline epoch (P1: toutes)   date: 2026-11-12
@@ -616,9 +611,9 @@ Decision:             Loading is the first target: build the decoded-image cache
                       (32 %, at best 1.47x alone) come second, with the GPU. Preprocessing
                       (3.4 %, at best 1.04x) is not worth optimizing first. Re-profile after
                       each change, because the shares will move.
-=======
-dd9e6c75b5b8280f1223d1815229da0d7efba42b
-=======
+
+### A4.14 Host-to-device copy: uint8 vs float32 batch (P4: Lina) — 2026-11-10, official run 2026-11-12
+
 - **Config / commit:** none (script defaults). Official run: `benchmarks/h2d_copy.py` at commit `a59a759` (on `main`), run by P1 on the RTX 3050 laptop (branch `p1-baseline`, `results/h2d_copy.csv`). Colab draft: same commit; its CSV was not committed, numbers below copied from the console output.
 - **Question:** how long does copying one batch of images from CPU memory to the GPU take as uint8 vs as float32? (The second part, how much of the GPU preprocessing time is the copy, needs P3's `preprocess_batch_gpu`.)
 - **Prediction:** uint8 should be about 4× faster to copy, because it has 4× fewer bytes to move (1 byte per value instead of 4).
@@ -642,7 +637,6 @@ dd9e6c75b5b8280f1223d1815229da0d7efba42b
   - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
   - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
 - **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Second part of A4.14 (copy share of `preprocess_batch_gpu`, with P3's pipeline on Colab T4): at batch size 32, GPU preprocessing (`circular_crop_gpu` + `clahe_gpu` + `normalize_gpu`) takes ~5.25 ms per batch (~0.164 ms/image), while copying the pinned uint8 batch takes 0.427 ms, so the H2D copy accounts for only **~7.5%** of the total GPU preprocessing time (5.68 ms total), compared to **~43.8%** if copying unpinned float32 tensors (4.09 ms copy vs 5.25 ms compute).
->>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8
 
 ### A4.16 Checkpoint questions (P3: Inès & P4: Lina)          date: 2026-11-11
 
@@ -892,8 +886,8 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Config / commit:** `configs/baseline.yaml`; `benchmarks/profile_gpu.py` at commit `8960169` (after two fixes, see Explanation).
 - **Question:** during steady-state training of the unoptimized baseline, what fraction of the time is the GPU idle, and how much of its busy time is host-to-device copies?
 - **Prediction:** a batch of 32 arrives about every 1,900 ms (about 17 img/s); one training step of the reference CNN is about 100 GFLOPs, about 33 ms on a T4 (about 3,000 GFLOP/s in practice). So the GPU idle fraction should be about 0.98. Copies should be a small part of the busy time (about 4 ms of copy per batch from A4.14, vs about 33 ms of kernels: about 10%).
-- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps). `trace.json` is not committed (`.gitignore`: large file).
-- **Result:** DRAFT on Colab T4 (`results/torch_profiler_baseline/summary.json`):
+- **Command:** `python benchmarks/profile_gpu.py --config configs/baseline.yaml --out results/torch_profiler_baseline` (Colab T4; 5 warm-up + 15 profiled steps; files later moved to `results/colab_t4/torch_profiler_baseline/`). `trace.json` is not committed (`.gitignore`: large file).
+- **Result:** DRAFT on Colab T4 (`results/colab_t4/torch_profiler_baseline/summary.json`):
 
   | | Prediction | Measured, per step |
   |---|---|---|
@@ -914,6 +908,7 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
   - **P2's work should help the most:** the decoded-image cache (A3) removes the repeated decoding, the main cost.
   - **For the copy:** copy uint8 batches from pinned memory, as A4.14 showed: pinned memory is P2's DataLoader option (A5.1), and copying uint8 needs P3's GPU preprocessing plugged in by P2's hook (A5.3).
   - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
+- **Prediction for the official run on the RTX 3050 laptop (P1, `results/torch_profiler_baseline_rtx3050/`), written before it:** GPU idle fraction about the same as on Colab (0.95), maybe slightly lower: the laptop's CPU decodes faster (shorter waits between batches) and its GPU computes more slowly (longer bursts of work), and both push the idle fraction down, but loading still dominates.
  
 ### A2.6 Rank the bottlenecks and compute the Amdahl bound
 
@@ -922,9 +917,6 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Prediction:** not recorded. A2.3 was skipped for lack of time, so no prediction was written before profiling. The ranking below is therefore after the fact.
 - **Command:** Amdahl bound `S_max = 1 / (1 - p)`, computed from the `fractions` field of `profile_stages.json`.
 
-<<<<<<< HEAD
->>>>>>> f39cf0ba7141500bc6b4af05b87c49f21deec50f
-=======
 **Result:**
 
 | Stage | Share of total time |
@@ -952,4 +944,3 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
 - **Prediction vs result:** not applicable, since no prediction was recorded beforehand. The profile shows loading (decode+resize) as the largest stage at 63.5%, backward second at 17.6%. CLAHE is only 1.8%, so the filters are not the bottleneck.
 - **Explanation:** data loading (JPEG decode + resize) dominates at 63.5%: in the baseline it runs on the CPU for every image at every epoch, while the GPU-side work (forward + backward) is only 32.1%. Optimising loading alone cannot exceed 2.74x; the bound for backward alone is only 1.21x. Preprocessing is only 3.4%, so moving it to the GPU gives at most 1.03x by itself. These bounds are ceilings: real gains are lower because no stage becomes free (a cache still reads from disk, for example).
 - **Decision:** attack loading first (A3 decoded-image cache, A5 DataLoader options and prefetching). Once loading is reduced, forward + backward become the next bottleneck, with a ceiling of 1.47x on the baseline. GPU preprocessing is kept for its transfer and CPU-offload benefits, not for its own share.
->>>>>>> 03beee38dc0353dcae11d7d29f21e792d70b39a8
