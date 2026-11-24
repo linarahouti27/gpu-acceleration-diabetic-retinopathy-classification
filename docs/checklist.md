@@ -33,7 +33,7 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 ## A4. GPU image processing
 
 - DONE(A4.12) Read the tolerances in `tests/test_cpu_gpu_equivalence.py`, run it, and say in the notebook whether you agree with them.
-- TODO(A4.13) Predict, then sweep batch sizes 1, 8, 32, 64, 128 for CLAHE and the median filter on CPU and GPU.
+- A4.13 (done) Predict, then sweep batch sizes 1, 8, 32, 64, 128 for CLAHE and the median filter on CPU and GPU.
 - TODO(A4.14) Measure the host-to-device copy of one uint8 batch and one float32 batch.
 - TODO(A4.15) Say which function gained most and which least, and why.
 - DONE(A4.16) Answer the A4 checkpoint questions.

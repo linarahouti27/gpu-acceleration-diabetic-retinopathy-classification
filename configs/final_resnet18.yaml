@@ -1,0 +1,36 @@
+# Final model (A6.9, A6.10): configs/optimized.yaml (all speed optimizations) + the best model
+# from the redesign experiments: ResNet-18 pretrained on ImageNet, lr 0.0001 (Colab drafts: val
+# macro-F1 0.55 vs 0.35 for the reference CNN, results/colab_t4/exp_resnet18_lr1e-4/).
+# Two changes vs optimized.yaml (model, lr) = the recipe tested as exp_resnet18 -> exp_resnet18_lr1e-4.
+# No augmentation: it halved the overfitting but did not improve val macro-F1 within 5 epochs.
+# Comparing optimized.yaml (reference CNN) with this file gives the model effect (A6.10), on the
+# same optimized pipeline, splits and training budget. Test set: once per final model (A7.8).
+seed: 42
+data:
+  split_seed: 42            # fixed: identical train/val/test images in every run
+  root: data/dr_dataset
+  image_size: [224, 224]
+  num_classes: 5
+  train_frac: 0.70
+  val_frac: 0.15
+  batch_size: 32            # TODO(A6.7): update after P1's batch-size tuning
+  num_workers: 2            # TODO(A5.8): update after P1's workers sweep
+  cache_dir: data/cache     # A3: decoded uint8 cache (P1's A3.5: loading ~1000x faster)
+  prefetch_factor: 2        # A5.1: batches each worker keeps ready
+  prefetch_gpu: true        # A5.2, A5.5: overlap the host-to-device copy with compute
+preprocess:
+  gpu: true                 # A4, A5.3: batched preprocessing on the GPU, uint8 copy (A4.14)
+  clahe: true
+  circular_crop: true
+  normalize: true
+  gamma: 1.0
+  augment: false            # same as the baseline
+train:
+  model: resnet18           # A6.6: ResNet-18 pretrained on ImageNet, last layer -> 5 grades
+  epochs: 5
+  lr: 0.0001                # A6.9: lr 0.001 is unstable for the pretrained network
+  amp: true                 # A6.1: mixed precision
+  channels_last: true       # A6.2: measured with AMP: 1.75x on Colab (P3)
+  compile: false            # A6.3: torch.compile needs Triton, not available on Windows
+  weight_decay: 0.0
+  label_smoothing: 0.0
