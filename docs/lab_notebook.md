@@ -952,7 +952,98 @@ Explanation:          Steady epoch: the final epoch is only 2.4-2.9x faster, so 
                       Setup: run 1 took 63.62 s. It includes building the decoded-image cache (bench_cache.py needed 27.0 s for the 2116 train images, about 38 s scaled to 2999 images, a computed value) and probably the one-time download of the pretrained ResNet18 weights, which the run 1 console shows; I did not time the parts. Runs 2-3 reuse the cache.
 Limitations:          This is not a pure GPU speedup: the final configuration also changes the model (ResNet18), AMP, channels_last and GPU preprocessing; A6.10 and the A7.6 ablation separate them. The baseline has one run, so no std. Best val_f1 is the best epoch chosen on the validation set. The final model overfits (train_acc about 0.96, val_acc about 0.52). Only 3 runs of 5 epochs on one laptop GPU. Not yet verified: that the timing code synchronizes CUDA, that train_time includes the host-to-device copies, and the GPU clocks during the runs.
 Decision:             Report the steady epoch both ways (training only 2.42x, training + validation 2.89x). Do not claim the GPU is the limit. Next: A7.7 re-profile of the final run to explain the 55 img/s, and the A7.6 ablation.
-
+### A7.6 Prediction: ablation of the final configuration (P1: Fatima zahrae)   date:2026-11-24
+Config / commit:      configs/final_resnet18.yaml, commit $commit
+Question:             Starting from the final configuration (steady epoch 38.84 s, val_f1 0.533 +/- 0.003, 614 MB), what happens when one optimization is switched off at a time?
+Prediction:           1) cache off (data.cache_dir null): the biggest loss. Without the cache loading costs about 54 ms per image (bench_cache.py), so 2 workers deliver a batch of 32 in about 0.87 s, while the training phase already needs about 0.58 s per batch. The loader becomes the limit: epoch about 55 to 65 s (+40 to +70 percent). F1 unchanged (same pixels).
+                      2) amp off: if the GPU compute is the limit, +10 to +60 percent in epoch time and +30 to +100 percent peak memory (fp32 activations). If something else limits the 55 img/s (my open question), the change will be near 0. F1 within +/- 0.01.
+                      3) gpu_preprocess off: CPU does crop, CLAHE and normalize: 2 to 3.4 ms per image in A2.5, so +2 to +10 s per epoch, plus 4 times more bytes copied (float32 instead of uint8). F1 within +/- 0.015 (the GPU CLAHE is not bit-identical to OpenCV).
+                      4) channels_last off: between -10 and +15 percent, probably small on this GPU. F1 unchanged.
+                      Expected ranking of the damage: cache > amp > gpu_preprocess > channels_last.
+                      A single run per ablation: F1 differences below about 0.01 are inside seed noise (std 0.003 over 3 seeds) and must not be reported as effects.
+Command:              python src/train.py --config configs\exp_<name>_off.yaml --device cuda --run A76_<name>_off --monitor
+Result:               see the entry "A7.6 Result" below
+Prediction vs result: see the entry "A7.6 Result" below
+Explanation:          see the entry "A7.6 Result" below
+Decision:             see the entry "A7.6 Result" below
+### A7.6 Result: ablation of the final configuration (P1: Fatima zahrae)   date: 2026-11-25
+Config / commit:      configs/final_resnet18.yaml, commit e93222f
+Prediction:           see the entry "A7.6 Prediction" above (written before the runs).
+Command:              python src/train.py --config configs\exp_<name>_off.yaml --device cuda --run A76_<name>_off --monitor
+                      Reference: A75_final_r1 and a fresh run A76_final_ref (same config, same day).
+Protocol:             5 epochs, seed 42, one run per ablation, same laptop and conditions as A7.5. Steady = epochs 1-4.
+Result:               run                    cold_s  steady_s  train_s  val_s  best_f1  mem_mb  wall_s
+                      A75_final_r1            57.94    38.84    38.42   0.42   0.5305    614    277.1
+                      A76_final_ref             -        -      38.46*    -    0.5305     -     220.8      (*mean of epochs 1-4 from the console: 38.44, 38.51, 38.45, 38.44)
+                      A76_amp_off             27.92     5.97     5.43   0.54   0.3323    721     52.5
+                      A76_channels_last_off   23.38     6.12     5.64   0.47   0.5408    616     48.5
+                      A76_cache_off             -        -      47.19*    -    0.3047     -     298.9      (*mean of epochs 1-4 from the console: 48.78, 47.39, 46.47, 46.10; 40-46 img/s)
+                      A76_gpu_preprocess_off  NOT RUN (gpu_preprocess is a command-line flag of train.py, not a config key).
+                      Changes against A75_final_r1 (steady epoch / training phase / memory):
+                      amp_off              -84.6 percent / -85.9 percent (7.1x faster) / +17.4 percent
+                      channels_last_off    -84.2 percent / -85.3 percent (6.8x faster) / +0.3 percent
+                      cache_off            training phase +22.8 percent (47.19 vs 38.42 s); wall +35 percent against A76_final_ref (298.9 vs 220.8 s)
+                      Flag proof: console line shows amp=False (amp_off) and channels_last=False (channels_last_off), and the make_cfg.py line "changed train.channels_last : True -> False". The cache_off console prints no cache flag; its config was not generated in this session.
+Prediction vs result: 1) cache off: predicted epoch 55-65 s (+40 to +70 percent), F1 unchanged. Measured: training phase +23 percent (about 47 s), below my range. F1 0.3047 (-0.226): wrong, unexplained.
+                      2) amp off: predicted +10 to +60 percent epoch time, +30 to +100 percent memory, F1 within 0.01. Measured: epoch time -85 percent (faster, wrong direction), memory +17 percent (below my range), F1 0.3323 (-0.198, wrong, unexplained).
+                      3) gpu_preprocess off: not run, no prediction can be checked.
+                      4) channels_last off: predicted -10 to +15 percent, F1 unchanged. Measured: epoch time -84 percent (far outside my range), memory +0.3 percent, F1 +0.0103 (0.5408 vs 0.5305), at the edge of my 0.01 noise rule, so not claimed as an effect.
+                      Ranking predicted: cache > amp > gpu_preprocess > channels_last (as damage). Measured: only cache off makes training slower. Switching off amp or channels_last makes it much faster. Wrong.
+Explanation:          Reference check: A76_final_ref reproduced A75 (38.44-38.51 s per training epoch, best val_f1 0.5305), so the 55 img/s of the final configuration is real and reproducible.
+                      Why amp and channels_last behave this way: the A7.7 profile of the final configuration shows the GPU 93.5 percent busy and about 89 percent of kernel time in cuDNN batch-norm kernels. Turning off either flag gives 5.4-5.6 s per epoch (340-390 img/s). My reading is that the slowness comes from the combination AMP + channels_last (a slow half-precision batch-norm path), so each ablation removes the combination and measures its cost, not the cost of the single flag. This is a hypothesis: the profile ran only the slow configuration, and the amp_off config is unverified (see Limitations).
+                      Cache off: the run is about 8 times slower per epoch than the two fast ablations, so loading limits it. At about 0.70 s per batch (47.19 s / 67 batches, derived) the loader is slower than the GPU step of the final configuration (about 0.57 s per batch), so epoch time rises by
+### A7.7 Prediction: re-profile of the final configuration (P1: fatima zahrae )   date: 2026-11-24
+Config / commit:      configs/final_resnet18.yaml, commit $commit
+Question:             Which stage dominates now, is the GPU idle between steps, and how much of the step is the host-to-device copy?
+Prediction:           Open question from A7.5: training runs at 55 img/s (0.58 s per batch of 32) while validation runs at about 1030 img/s, which is about 6 times slower than a 3x forward-cost estimate would give. I predict the GPU is idle for more than 40 percent of the training step, with the gaps between steps, and that the cause is outside the GPU kernels: the data loader (2 workers on Windows) or per-step CPU work (GradScaler, optimizer, Python overhead). Less likely: GPU throttling (it can be checked in the monitor file).
+                      Host-to-device copy: a uint8 batch of 32 images is 4.8 MB (32 x 224 x 224 x 3), about 0.4 to 1 ms at 5 to 12 GB/s, under 2 percent of a 0.58 s step.
+                      The bottleneck moved: in the baseline, loading was 63.5 percent of the epoch. In the final run I expect forward + backward (and the waiting for them) to dominate.
+Command:              python benchmarks/profile_gpu.py <arguments from --help>
+Result:               see the entry "A7.7 Result" below
+Prediction vs result: see the entry "A7.7 Result" below
+Explanation:          see the entry "A7.7 Result" below
+Decision:             see the entry "A7.7 Result" below
+### A7.7 Result: re-profile of the final configuration (P1: Fatima zahrae)   date: 2026-11-25
+Config / commit:      configs/final_resnet18.yaml, commit <hash>
+Prediction:           see the entry "A7.7 Prediction" above (written before the run).
+Command:              python benchmarks/profile_gpu.py --config configs\final_resnet18.yaml --out results\A77_profiler | Tee-Object -FilePath results\A77_profile_console.txt
+                      Defaults: 5 warmup steps, 15 profiled steps, batch 32, RTX 3050 6GB Laptop GPU, amp=True, channels_last=True, gpu_preprocess=True.
+Protocol:             One profile run, 15 steps after 5 warmup steps. Reference: A76_final_ref (same config, run on 2026-11-25): steady training epoch 38.44-38.51 s (55 img/s), best val_f1 0.5305, identical to A75_final_r1.
+Result:               wall per step              622.7 ms (9340 ms / 15)
+                      GPU kernel time per step   588.1 ms (8820.9 ms / 15)
+                      GPU busy                   8729.1 ms of 9340.2 ms = 93.5 percent; GPU idle fraction 0.065 (6.5 percent)
+                      Host-to-device copy        8.07 ms in total = 0.54 ms per step; 72.26 MB in total = 4.82 MB per step (about 9.0 GB/s); 0.09 percent of the step
+                      Device-to-host copy        0.036 ms in total
+                      Top GPU operations (Self CUDA):
+                        cudnn_batch_norm_backward   4.759 s   54.5 percent   300 calls   15.9 ms per call
+                        cudnn_batch_norm (forward)  3.082 s   35.3 percent   300 calls   10.3 ms per call
+                        convolution backward        0.266 s    3.0 percent   0.89 ms per call
+                        convolution forward         0.128 s    1.5 percent   0.43 ms per call
+                        AdamW step                  0.099 s    1.1 percent
+                      Batch norm forward + backward = 7.84 s of 8.82 s kernel time = about 89 percent. The batch-norm kernels are cuDNN half-precision kernels (bn_fw_tr / bn_bw, type half).
+                      Related measurements from A7.6 (single runs, seed 42): same config with channels_last=False: 5.64 s training per epoch (374 img/s), with amp=False: 5.42 s (390 img/s).
+Prediction vs result: GPU idle more than 40 percent: measured 6.5 percent. Wrong.
+                      Cause outside the GPU kernels (data loader, GradScaler, optimizer, Python): wrong. The loader keeps the GPU fed; the optimizer step is 1.1 percent of kernel time.
+                      Host-to-device copy 0.4-1 ms, under 2 percent of the step: measured 0.54 ms, 0.09 percent. Right (4.82 MB per step also matches my 4.8 MB).
+                      Forward + backward dominate after the bottleneck moved: right in direction (GPU busy 93.5 percent), wrong in kind: I expected convolutions; 89 percent is batch norm and only about 4.5 percent is convolution.
+                      GPU throttling (less likely): not checked, the monitor file of this run was not analyzed.
+Explanation:          The 55 img/s is not a loading problem and not a GPU-idle problem. The GPU is busy, and almost all of its time goes into the cuDNN batch-norm kernels in training mode, which are about 24 times slower per call than a convolution (10.3 ms vs 0.43 ms). Per step that is about 205 ms forward and 317 ms backward of 588 ms of kernel time.
+                      The A7.6 runs point at the combination of AMP and channels_last: turning either off gives 5.4-5.6 s per epoch, the same size as my A7.5 prediction (5-12 s) and about 340-390 img/s, which matches the 3x-forward estimate. This also explains the open question of A7.5: validation runs at 1030 img/s because batch norm there uses running statistics (eval mode, a different and apparently fast kernel) and has no backward pass.
+                      Not tested: that the slow kernels are the channels_last half-precision path (this profile ran only the slow config); the cause inside cuDNN or the driver (version-specific behaviour is possible); the CUDA clocks.
+Limitations:          One profile of 15 steps on one laptop GPU. Wall per step (622.7 ms) is about 8 percent above the 574 ms per batch of the real training loop (38.44 s / 67 batches, derived), which is profiler overhead. The comparison with channels_last off and amp off comes from single 5-epoch runs without a profile; the amp_off configuration is of unknown content (its F1 0.33 is unexplained, see A7.6). summary.json reports idle as the part of the profiled wall time not covered by GPU kernels, and I did not verify the definition beyond the code header.
+Decision:             The final configuration as written (AMP + channels_last) is a pessimization on this GPU: it is about 6.8x slower in the training phase than the same config with channels_last off, with val_f1 0.5408 vs 0.5305 (inside the 0.01 noise band, so no accuracy claim). Proposal for the team: change channels_last to false in the final config, then repeat A7.5 (3 seeds) for the new final configuration. Next: profile exp_channels_last_off.yaml to confirm that batch norm no longer dominates, and read the GPU monitor file for throttling.
+### A7.8 Prediction: test-set evaluation, baseline and final model (P1: fatima zahrae)   date: 2026-11-24
+Config / commit:      commit $commit
+Question:             What are accuracy, macro-precision, macro-recall and macro-F1 of the baseline and of the final model on the test set (458 images)?
+Prediction:           Baseline (val_acc 0.386, val_f1 0.336 at the last epoch): test accuracy 0.34 to 0.42, macro-F1 0.28 to 0.37.
+                      Final model (val_acc about 0.53, best val_f1 0.5305): test accuracy 0.47 to 0.53, macro-F1 0.45 to 0.52. Reason: the checkpoint is chosen by the best validation F1, which is slightly optimistic, so the test score should sit a little below it; with 458 images one standard deviation is about 2.3 points.
+                      The final model overfits (train_acc about 0.96, val_acc about 0.52), so I expect no large jump from the baseline's relative gain on validation.
+                      The confusion matrix should show confusion mostly between neighbouring severity classes.
+Command:              python src/evaluate.py <arguments from --help>, run once per model, output saved in results\A78_eval_baseline.txt and results\A78_eval_final.txt
+Result:               see the entry "A7.8 Result" below
+Prediction vs result: see the entry "A7.8 Result" below
+Explanation:          see the entry "A7.8 Result" below
+Decision:             see the entry "A7.8 Result" below
 ### A2.6 Rank the bottlenecks and compute the Amdahl bound
 
 - **Config / commit:** baseline profile, `results/profile_stages.json` (produced by A2.4, `benchmarks/profile_baseline.py`), machine: Colab T4 (trial run), commit 6c43b90
