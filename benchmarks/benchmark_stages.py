@@ -90,21 +90,85 @@ def main():
     add("train_step", "cpu", train_step, cpu, repeats=3, warmup=1)
     add("inference", "cpu", infer, cpu, repeats=3, warmup=1)
 
-    # ---- GPU rows (yours) ----
+    # ---- GPU rows (A5.6) ----
     if has_cuda:
-        #   loading         - pick one: GPU decode with torchvision.io.decode_jpeg(device="cuda")
-        #                     (JPEG inputs only) or the uint8 cache from A3. State which one.
-        #   h2d_transfer    - a pinned uint8 batch copied to the device (the price every GPU stage pays)
-        #   preprocessing   - preprocess_gpu.preprocess_batch_gpu, INCLUDING the host-to-device copy
-        #   filter_*        - the four filters_gpu functions on a tensor that is already on the GPU
-        #   augmentation    - preprocess_gpu.augment_gpu
-        #   train_step / inference - the SAME model as the CPU row on the GPU (so you isolate the
-        #                     effect of the device), then once more with AMP. Label the variants.
-        # Rule: warm up before timing (the first CUDA call pays for context and kernel loading)
-        # and let GpuTimer synchronize.
-        pass
+        from src import preprocess_gpu, filters_gpu
+        from src.data_loader import build_cache
+        gpu = torch.device("cuda")
+
+        # loading: from the uint8 cache of A3 (our images are PNGs, so no GPU JPEG decode).
+        # Reading the cache is CPU work, so the timer uses the CPU device.
+        cache = build_cache(train, cfg["data"]["image_size"], "data/cache")   # built once, not timed
+        ds_cached = DRDataset(train, cfg["data"]["image_size"], cache=cache)
+        add("loading", "cuda", lambda: [ds_cached.load(i) for i in range(N)], cpu, repeats=3, warmup=1)
+
+        # h2d_transfer: a pinned uint8 batch copied to the device
+        u8_pinned = torch.from_numpy(u8).pin_memory()     # N,H,W,3 uint8, pinned, still on the CPU
+        add("h2d_transfer", "cuda", lambda: u8_pinned.to(gpu, non_blocking=True), gpu)
+
+        # preprocessing, host-to-device copy included
+        add("preprocessing", "cuda",
+            lambda: preprocess_gpu.preprocess_batch_gpu(u8_pinned, cfg, device=gpu), gpu)
+
+        # filters and augmentation: the input is already on the GPU (copy not timed)
+        t_gpu = preprocess_gpu.to_float_bchw(u8_pinned, gpu)      # float N,C,H,W on the GPU
+        add("filter_gaussian", "cuda", lambda: filters_gpu.gaussian_blur_gpu(t_gpu), gpu)
+        add("filter_median", "cuda", lambda: filters_gpu.median_filter_gpu(t_gpu), gpu)
+        add("filter_median_numba", "cuda", lambda: filters_gpu.median_filter_numba(t_gpu), gpu)
+        add("filter_green", "cuda", lambda: filters_gpu.green_channel_gpu(t_gpu), gpu)
+        add("filter_contrast", "cuda", lambda: filters_gpu.contrast_stretch_gpu(t_gpu), gpu)
+        add("augmentation", "cuda", lambda: preprocess_gpu.augment_gpu(t_gpu), gpu)
+
+        # train_step / inference: same model type as the CPU rows, on the GPU, then with AMP
+        x_gpu, y_gpu = x.to(gpu), y.to(gpu)
+        model_gpu = build_model(cfg["train"]["model"], cfg["data"]["num_classes"]).to(gpu)
+        opt_gpu = torch.optim.AdamW(model_gpu.parameters(), lr=1e-4)
+        scaler = torch.amp.GradScaler("cuda")
+
+        def train_step_gpu():
+            model_gpu.train()
+            opt_gpu.zero_grad(set_to_none=True)
+            crit(model_gpu(x_gpu), y_gpu).backward()
+            opt_gpu.step()
+
+        def infer_gpu():
+            model_gpu.eval()
+            with torch.no_grad():
+                model_gpu(x_gpu)
+
+        def train_step_gpu_amp():
+            model_gpu.train()
+            opt_gpu.zero_grad(set_to_none=True)
+            with torch.autocast("cuda"):
+                loss = crit(model_gpu(x_gpu), y_gpu)
+            scaler.scale(loss).backward()
+            scaler.step(opt_gpu)
+            scaler.update()
+
+        def infer_gpu_amp():
+            model_gpu.eval()
+            with torch.no_grad(), torch.autocast("cuda"):
+                model_gpu(x_gpu)
+
+        add("train_step", "cuda", train_step_gpu, gpu, repeats=3, warmup=1)
+        add("inference", "cuda", infer_gpu, gpu, repeats=3, warmup=1)
+        add("train_step_amp", "cuda", train_step_gpu_amp, gpu, repeats=3, warmup=1)
+        add("inference_amp", "cuda", infer_gpu_amp, gpu, repeats=3, warmup=1)
 
     df = pd.DataFrame(rows)
+
+    # ---- A5.7: speedup column (CPU time / GPU time of the same stage) ----
+    cpu_mean = {r["stage"]: r["mean_s"] for r in rows if r["device"] == "cpu"}
+
+    def speedup(row):
+        if row["device"] != "cuda":
+            return float("nan")
+        base = row["stage"].replace("_amp", "").replace("_numba", "")   # train_step_amp -> train_step
+        if base not in cpu_mean:                                       # h2d_transfer has no CPU row
+            return float("nan")
+        return cpu_mean[base] / row["mean_s"]
+
+    df["speedup"] = df.apply(speedup, axis=1)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     df.to_csv(args.out, index=False)
     print(df.to_string(index=False))

@@ -22,9 +22,9 @@ evidence exists (a notebook entry or a file in `results/`), delete the tag from 
 - TODO(A2.5) Run `benchmarks/benchmark_stages.py --n 64`.
 - TODO(A2.6) Rank the bottlenecks and compute the Amdahl bound for the top two.
 - DONE(A2.7) Use a second profiler on one function and report what it showed that `cProfile` did not.
-- TODO(A2.8) Read `results/baseline/resources.csv` and decide whether the CPU is saturated.
-- TODO(A2.9) Write the profiling report (timing table, bar chart, ranked priorities).
-- TODO(A2.10) Answer the A2 checkpoint questions.
+- Read `results/baseline/resources.csv` and decide whether the CPU is saturated.
+- Write the profiling report (timing table, bar chart, ranked priorities).
+- Answer the A2 checkpoint questions.
 
 ## A3. Loading redesign: decoded-image cache
 
