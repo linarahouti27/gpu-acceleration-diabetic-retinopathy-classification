@@ -30,7 +30,7 @@ train:
   epochs: 5
   lr: 0.0001                # A6.9: lr 0.001 is unstable for the pretrained network
   amp: true                 # A6.1: mixed precision
-  channels_last: true       # A6.2: measured with AMP: 1.75x on Colab (P3)
+  channels_last: false       # A6.2: measured with AMP: 1.75x on Colab (P3)
   compile: false            # A6.3: torch.compile needs Triton, not available on Windows
   weight_decay: 0.0
   label_smoothing: 0.0
