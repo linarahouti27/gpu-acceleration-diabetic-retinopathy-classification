@@ -1,0 +1,19 @@
+{
+  "config": "configs/final_resnet18.yaml",
+  "model": "resnet18",
+  "batch_size": 32,
+  "gpu": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+  "gpu_preprocess": true,
+  "amp": true,
+  "channels_last": true,
+  "warmup_steps": 5,
+  "profiled_steps": 15,
+  "wall_ms": 11768.871299980674,
+  "wall_ms_per_step": 784.5914199987116,
+  "gpu_kernel_ms": 9350.366122000032,
+  "h2d_memcpy_ms": 8.330689999999741,
+  "h2d_bytes": 72257280,
+  "d2h_memcpy_ms": 0.038305000001681036,
+  "gpu_busy_ms": 9258.19317000003,
+  "gpu_idle_fraction": 0.21333210857567686
+}

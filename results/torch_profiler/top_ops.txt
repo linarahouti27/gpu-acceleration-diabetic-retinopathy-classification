@@ -1,0 +1,36 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          ProfilerStep*         0.00%       0.000us         0.00%       0.000us       0.000us       13.476s       147.26%       13.476s     299.473ms            45  
+autograd::engine::evaluate_function: CudnnBatchNormB...         0.31%      35.298ms         1.88%     214.345ms     714.485us       0.000us         0.00%        5.005s      16.682ms           300  
+                                CudnnBatchNormBackward0         0.09%       9.919ms         1.57%     179.048ms     596.826us       0.000us         0.00%        5.005s      16.682ms           300  
+                        aten::cudnn_batch_norm_backward         0.58%      65.598ms         1.48%     169.129ms     563.763us        5.005s        54.69%        5.005s      16.682ms           300  
+                                          ProfilerStep*        14.67%        1.673s        92.35%       10.532s     702.119ms       0.000us         0.00%        3.741s     249.399ms            15  
+                                       aten::batch_norm         0.06%       7.363ms         2.09%     238.546ms     795.155us       0.000us         0.00%        3.202s      10.674ms           300  
+                           aten::_batch_norm_impl_index         0.08%       8.652ms         2.03%     231.184ms     770.612us       0.000us         0.00%        3.202s      10.674ms           300  
+                                 aten::cudnn_batch_norm         0.87%      99.147ms         1.95%     222.532ms     741.773us        3.202s        34.99%        3.202s      10.674ms           300  
+_ZN5cudnn24bn_fw_tr_1C11_singlereadI6__halfLi512ELb0...         0.00%       0.000us         0.00%       0.000us       0.000us        3.202s        34.99%        3.202s      10.674ms           300  
+_ZN5cudnn21bn_bw_1C11_singlereadI6__halfLi512ELb0ELi...         0.00%       0.000us         0.00%       0.000us       0.000us        2.746s        30.01%        2.746s       9.636ms           285  
+_ZN5cudnn21bn_bw_1C11_kernel_newI6__halff6float2Li51...         0.00%       0.000us         0.00%       0.000us       0.000us        2.258s        24.67%        2.258s     150.535ms            15  
+autograd::engine::evaluate_function: ConvolutionBack...         0.29%      33.192ms         2.94%     335.487ms       1.118ms       0.000us         0.00%     294.225ms     980.750us           300  
+                                           aten::conv2d         0.22%      24.735ms         4.11%     468.754ms     781.257us       0.000us         0.00%     274.312ms     457.187us           600  
+                                   ConvolutionBackward0         0.11%      12.561ms         2.42%     275.905ms     919.684us       0.000us         0.00%     270.895ms     902.983us           300  
+                             aten::convolution_backward         1.12%     127.322ms         2.31%     263.344ms     877.815us     270.895ms         2.96%     270.895ms     902.983us           300  
+                              Optimizer.step#AdamW.step         0.00%       0.000us         0.00%       0.000us       0.000us     214.821ms         2.35%     214.821ms      14.321ms            15  
+                                      aten::convolution         0.14%      16.210ms         1.45%     165.136ms     550.454us       0.000us         0.00%     130.553ms     435.178us           300  
+                                     aten::_convolution         0.18%      20.071ms         1.31%     148.838ms     496.125us       0.000us         0.00%     130.553ms     435.178us           300  
+                                aten::cudnn_convolution         0.67%      76.931ms         1.13%     128.767ms     429.222us     130.553ms         1.43%     130.553ms     435.178us           300  
+                              Optimizer.step#AdamW.step         1.16%     132.237ms         2.51%     286.090ms      19.073ms       0.000us         0.00%     107.796ms       7.186ms            15  
+                                            aten::copy_         0.60%      68.031ms         1.99%     226.378ms     212.562us      61.362ms         0.67%      61.362ms      57.617us          1065  
+     autograd::engine::evaluate_function: ReluBackward0         0.13%      14.683ms         0.69%      78.351ms     307.260us       0.000us         0.00%      59.273ms     232.443us           255  
+                                          ReluBackward0         0.09%       9.986ms         0.56%      63.669ms     249.681us       0.000us         0.00%      59.273ms     232.443us           255  
+                               aten::threshold_backward         0.21%      23.754ms         0.47%      53.683ms     210.522us      59.273ms         0.65%      59.273ms     232.443us           255  
+_ZN17cutlass__5x_cudnn6KernelI70cutlass_tensorop_f16...         0.00%       0.000us         0.00%       0.000us       0.000us      58.616ms         0.64%      58.616ms     488.469us           120  
+_ZN2at6native29vectorized_elementwise_kernelILi4ENS0...         0.00%       0.000us         0.00%       0.000us       0.000us      58.548ms         0.64%      58.548ms     243.950us           240  
+_ZN17cutlass__5x_cudnn6KernelI70cutlass_tensorop_f16...         0.00%       0.000us         0.00%       0.000us       0.000us      51.584ms         0.56%      51.584ms     491.275us           105  
+                                             aten::add_         0.59%      67.001ms         1.20%     136.880ms      93.116us      42.966ms         0.47%      42.966ms      29.229us          1470  
+autograd::engine::evaluate_function: MaxPool2DWithIn...         0.01%       1.422ms         0.08%       9.339ms     622.567us       0.000us         0.00%      42.600ms       2.840ms            15  
+                          MaxPool2DWithIndicesBackward0         0.01%       1.403ms         0.07%       7.917ms     527.780us       0.000us         0.00%      42.600ms       2.840ms            15  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 11.404s
+Self CUDA time total: 9.151s

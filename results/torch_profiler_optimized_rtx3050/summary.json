@@ -1,0 +1,19 @@
+{
+  "config": "configs/optimized.yaml",
+  "model": "reference_cnn",
+  "batch_size": 32,
+  "gpu": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+  "gpu_preprocess": true,
+  "amp": true,
+  "channels_last": true,
+  "warmup_steps": 5,
+  "profiled_steps": 15,
+  "wall_ms": 816.1443000135478,
+  "wall_ms_per_step": 54.40962000090318,
+  "gpu_kernel_ms": 682.5962310000014,
+  "h2d_memcpy_ms": 10.240779999999829,
+  "h2d_bytes": 72257280,
+  "d2h_memcpy_ms": 0.03398700000039389,
+  "gpu_busy_ms": 683.254105000002,
+  "gpu_idle_fraction": 0.16282683713081103
+}

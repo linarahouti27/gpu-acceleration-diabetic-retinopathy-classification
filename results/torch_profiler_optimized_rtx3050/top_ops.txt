@@ -1,0 +1,36 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          ProfilerStep*         0.00%       0.000us         0.00%       0.000us       0.000us     711.686ms       103.82%     711.686ms      23.723ms            30  
+                                          ProfilerStep*        11.27%      84.157ms        95.73%     714.773ms      47.652ms       0.000us         0.00%     387.992ms      25.866ms            15  
+                                           aten::conv2d         0.08%     576.300us         2.30%      17.167ms     190.742us       0.000us         0.00%     189.092ms       2.101ms            90  
+autograd::engine::evaluate_function: MaxPool2DWithIn...         0.06%     471.900us         0.38%       2.857ms      63.498us       0.000us         0.00%     115.965ms       2.577ms            45  
+                          MaxPool2DWithIndicesBackward0         0.06%     445.400us         0.32%       2.385ms      53.011us       0.000us         0.00%     115.965ms       2.577ms            45  
+                 aten::max_pool2d_with_indices_backward         0.08%     621.400us         0.26%       1.940ms      43.113us      95.003ms        13.86%     115.965ms       2.577ms            45  
+autograd::engine::evaluate_function: ConvolutionBack...         0.16%       1.216ms         1.21%       9.015ms     200.324us       0.000us         0.00%     112.828ms       2.507ms            45  
+                                   ConvolutionBackward0         0.04%     301.300us         1.04%       7.799ms     173.304us       0.000us         0.00%     112.828ms       2.507ms            45  
+                             aten::convolution_backward         0.44%       3.252ms         1.00%       7.497ms     166.609us      90.833ms        13.25%     112.828ms       2.507ms            45  
+_ZN2at6native52_GLOBAL__N__83ba8c45_19_DilatedMaxPoo...         0.00%       0.000us         0.00%       0.000us       0.000us      95.003ms        13.86%      95.003ms       2.111ms            45  
+                                      aten::convolution         0.10%     723.100us         0.88%       6.589ms     146.411us       0.000us         0.00%      92.690ms       2.060ms            45  
+                                     aten::_convolution         0.14%       1.021ms         0.79%       5.865ms     130.342us       0.000us         0.00%      92.690ms       2.060ms            45  
+     autograd::engine::evaluate_function: ReluBackward0         0.04%     286.600us         0.24%       1.786ms      29.770us       0.000us         0.00%      65.262ms       1.088ms            60  
+                                          ReluBackward0         0.03%     213.400us         0.20%       1.500ms      24.993us       0.000us         0.00%      65.262ms       1.088ms            60  
+                               aten::threshold_backward         0.09%     643.800us         0.17%       1.286ms      21.437us      65.262ms         9.52%      65.262ms       1.088ms            60  
+_ZN2at6native29vectorized_elementwise_kernelILi4ENS0...         0.00%       0.000us         0.00%       0.000us       0.000us      65.262ms         9.52%      65.262ms       1.088ms            60  
+                                       aten::max_pool2d         0.06%     442.900us         0.27%       2.002ms      44.489us       0.000us         0.00%      58.908ms       1.309ms            45  
+                          aten::max_pool2d_with_indices         0.13%     968.400us         0.21%       1.559ms      34.647us      58.908ms         8.59%      58.908ms       1.309ms            45  
+_ZN2at6native52_GLOBAL__N__83ba8c45_19_DilatedMaxPoo...         0.00%       0.000us         0.00%       0.000us       0.000us      58.908ms         8.59%      58.908ms       1.309ms            45  
+                                aten::cudnn_convolution         0.34%       2.567ms         0.49%       3.660ms      81.340us      46.643ms         6.80%      46.643ms       1.037ms            45  
+                                             aten::add_         0.11%     797.200us         0.18%       1.369ms       7.019us      46.047ms         6.72%      46.047ms     236.138us           195  
+_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22g...         0.00%       0.000us         0.00%       0.000us       0.000us      46.047ms         6.72%      46.047ms       1.023ms            45  
+                                            aten::relu_         0.11%     802.100us         0.29%       2.176ms      36.273us       0.000us         0.00%      44.079ms     734.651us            60  
+                                       aten::clamp_min_         0.07%     516.500us         0.18%       1.374ms      22.905us      44.079ms         6.43%      44.079ms     734.651us            60  
+_ZN2at6native29vectorized_elementwise_kernelILi4EZZZ...         0.00%       0.000us         0.00%       0.000us       0.000us      44.079ms         6.43%      44.079ms     734.651us            60  
+                                            aten::copy_         0.67%       5.013ms         2.17%      16.188ms      22.961us      43.230ms         6.31%      43.230ms      61.319us           705  
+                                            aten::index         0.19%       1.440ms         0.74%       5.532ms      92.200us      22.140ms         3.23%      35.118ms     585.298us            60  
+                                              aten::mul         0.44%       3.280ms         0.97%       7.250ms      23.016us      31.301ms         4.57%      31.301ms      99.367us           315  
+                                              aten::div         0.37%       2.777ms         0.71%       5.307ms      23.585us      25.298ms         3.69%      25.298ms     112.434us           225  
+                                            aten::fill_         0.13%     948.000us         0.38%       2.845ms      18.965us      23.534ms         3.43%      23.534ms     156.890us           150  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 746.678ms
+Self CUDA time total: 685.516ms
