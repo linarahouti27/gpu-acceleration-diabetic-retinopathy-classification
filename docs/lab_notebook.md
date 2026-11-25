@@ -910,6 +910,49 @@ Decision:             Enable `amp: true` and `channels_last: true` in `configs/o
   - **Next:** run the same script on `configs/optimized.yaml` once the team's work is merged (official runs on P1's RTX 3050, baseline included), to see whether the idle fraction drops and the bottleneck moves (A7.7).
 - **Prediction for the official run on the RTX 3050 laptop (P1, `results/torch_profiler_baseline_rtx3050/`), written before it:** GPU idle fraction about the same as on Colab (0.95), maybe slightly lower: the laptop's CPU decodes faster (shorter waits between batches) and its GPU computes more slowly (longer bursts of work), and both push the idle fraction down, but loading still dominates.
  
+
+
+### A7.5 Prediction: benchmark protocol on the final configuration (P1: fatima zahrae)   date: 2026-11-22
+Config / commit:      configs/final_resnet18.yaml, commit $commit
+Question:             What are the cold and steady-state epoch times of the final pipeline, and how variable are they across 3 repeats?
+Prediction:           Steady epoch (epochs 1+): about 5 to 12 s, which is about 8 to 19 times faster than the baseline steady epoch (92.9 s +/- 2.2).
+                      Reason: with the cache and GPU preprocessing, loading (63.5 percent of the baseline epoch) almost disappears. ResNet18 forward + backward is about 5.4 GFLOPs per image, so 2116 images are about 11 TFLOP per epoch, which a laptop RTX 3050 with mixed precision should do in roughly 3 to 8 s. Validation and the data loader add a little. This is an estimate, not a measurement.
+                      Cold epoch (epoch 0): 2 to 6 s slower than a steady epoch, because of CUDA start-up and cuDNN autotuning.
+                      setup_time_s: run 1 about 40 s if the cache is built in setup (bench_cache.py needed 27.0 s for the 2116 train images, so about 38 s scaled to 2999, a computed value). Runs 2 and 3 should reuse the cache and take a few seconds.
+                      Variability: std below about 5 percent of the mean between runs. A laptop GPU can throttle, so it may be higher.
+                      GPU peak memory: about 1 to 2 GB (low confidence).
+Command:              see Step 4 of this procedure (3 runs, seeds 42, 43, 44)
+Result / Prediction vs result / Explanation / Decision: see the entry "A7.5 Result" below.
+
+### A7.5 Result: benchmark protocol, final configuration vs baseline (P1: Fatima zahrae)   date: 2026-11-25
+Config / commit:      configs/final_resnet18.yaml, commit $commit (HEAD when writing; the runs were made on 2026-11-24)
+Prediction:           see the entry "A7.5 Prediction" above (written before the runs).
+Command:              python src/train.py --config <config> --device cuda --run A75_final_r<1..3> --monitor
+                      configs: final_resnet18.yaml (seed 42), exp_final_seed43.yaml, exp_final_seed44.yaml. Baseline: results/baseline, 1 run (no std).
+Protocol:             Epoch 0 = cold, epochs 1-4 = steady-state. 3 runs of the final configuration, 5 epochs each, charger plugged in, Best performance, 60 s pause between runs.
+                      cold_epoch_s and steady_epoch_s are train time + validation time of the epoch.
+Result:               run          setup_s   cold_s   steady_s   wall_s   best val_f1   peak GPU mem
+                      final r1      63.62     57.94    38.84     277.11     0.5305        614 MB
+                      final r2       0.46     56.26    38.84     212.31     0.5353        614 MB
+                      final r3       0.48     58.01    38.83     213.94     0.5346        614 MB
+                      final mean    21.52     57.40    38.839    234.45     0.533
+                      final std     36.46      0.99     0.007     36.95     0.003
+                      baseline       2.52    112.54   112.27     564.37     0.3356 (val_f1 at epoch 4; val_acc 0.3859)   none (CPU)
+                      Steady epoch split: final = 38.42 s training + 0.41 s validation. Baseline = 92.91 s training (mean of epochs 1-4) + about 19.36 s validation (derived: 112.27 - 92.91).
+                      Throughput: training 55 img/s (final) vs 22 img/s (baseline); validation about 1030 img/s vs about 21 img/s.
+                      Speedups (baseline / final): steady epoch 112.27 / 38.84 = 2.89x. Training only 92.91 / 38.42 = 2.42x. Validation about 47x. Cold epoch 112.54 / 57.40 = 1.96x. Wall time of 5 epochs 564.37 / 234.45 = 2.41x (all runs) and 564.37 / 213.12 = 2.65x (runs 2-3, cache already built).
+Prediction vs result: Steady epoch predicted 5-12 s, measured 38.84 s: 3.2 times above my upper bound. The predicted speedup of 8-19x became 2.89x (2.42x for training only). Wrong.
+                      Cold epoch predicted +2-6 s over steady, measured +18.6 s (57.40 - 38.84). Wrong.
+                      Setup of run 1 predicted about 40 s, measured 63.6 s. Wrong. Runs 2-3 predicted a few seconds, measured 0.46 and 0.48 s. Right (the cache is reused).
+                      Variability predicted below 5 percent, measured 0.007 s between runs on the steady epoch (0.02 percent) and 0.99 s on the cold epoch (1.7 percent). Right.
+                      GPU peak memory predicted 1-2 GB (low confidence), measured 0.61 GB. Wrong.
+Explanation:          Steady epoch: the final epoch is only 2.4-2.9x faster, so loading is not the only cost. My FLOP estimate used 5.4 GFLOP per image for forward + backward; ResNet18 at 224x224 (if the final config uses that size, not checked) is about 1.8 GMACs forward, about 11 GFLOP forward + backward, twice my figure.
+                      Open question: validation runs at about 1030 img/s while training runs at 55 img/s. Training costs about 3 times a forward pass, which would predict about 340 img/s, so training is about 6x slower than expected. Possible causes, none tested: validation uses a larger batch size, the train loader, the optimizer or GradScaler steps, or GPU throttling. A7.7 (profile_gpu.py) and the GPU monitor must find the cause.
+                      Cold epoch: epoch 0 of run 1 takes 48.89 s of training against 38.42 s steady (+10.5 s) and its validation takes 9.05 s against 0.41 s (+8.6 s); the first validation ran at 47 img/s against about 1030 img/s later. This points to one-time start-up costs (CUDA, cuDNN autotuning, lazy initialization); I did not test which one.
+                      Setup: run 1 took 63.62 s. It includes building the decoded-image cache (bench_cache.py needed 27.0 s for the 2116 train images, about 38 s scaled to 2999 images, a computed value) and probably the one-time download of the pretrained ResNet18 weights, which the run 1 console shows; I did not time the parts. Runs 2-3 reuse the cache.
+Limitations:          This is not a pure GPU speedup: the final configuration also changes the model (ResNet18), AMP, channels_last and GPU preprocessing; A6.10 and the A7.6 ablation separate them. The baseline has one run, so no std. Best val_f1 is the best epoch chosen on the validation set. The final model overfits (train_acc about 0.96, val_acc about 0.52). Only 3 runs of 5 epochs on one laptop GPU. Not yet verified: that the timing code synchronizes CUDA, that train_time includes the host-to-device copies, and the GPU clocks during the runs.
+Decision:             Report the steady epoch both ways (training only 2.42x, training + validation 2.89x). Do not claim the GPU is the limit. Next: A7.7 re-profile of the final run to explain the 55 img/s, and the A7.6 ablation.
+
 ### A2.6 Rank the bottlenecks and compute the Amdahl bound
 
 - **Config / commit:** baseline profile, `results/profile_stages.json` (produced by A2.4, `benchmarks/profile_baseline.py`), machine: Colab T4 (trial run), commit 6c43b90
