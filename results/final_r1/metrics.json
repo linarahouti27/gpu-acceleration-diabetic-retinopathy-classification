@@ -1,0 +1,99 @@
+{
+  "run": "final_r1",
+  "config": "configs/final_resnet18.yaml",
+  "checkpoint": "checkpoints\\final_r1\\best.pt",
+  "device": "cuda",
+  "amp": true,
+  "channels_last": false,
+  "checkpoint_epoch": 4,
+  "val_acc": 0.548235294117647,
+  "n_test": 458,
+  "accuracy": 0.517467248908297,
+  "macro_precision": 0.5167263166904053,
+  "macro_recall": 0.521405301775619,
+  "macro_f1": 0.5182673258116525,
+  "per_class": {
+    "0": {
+      "precision": 0.4418604651162791,
+      "recall": 0.48717948717948717,
+      "f1-score": 0.4634146341463415,
+      "support": 78.0
+    },
+    "1": {
+      "precision": 0.5346534653465347,
+      "recall": 0.5,
+      "f1-score": 0.5167464114832536,
+      "support": 108.0
+    },
+    "2": {
+      "precision": 0.358974358974359,
+      "recall": 0.3146067415730337,
+      "f1-score": 0.33532934131736525,
+      "support": 89.0
+    },
+    "3": {
+      "precision": 0.48623853211009177,
+      "recall": 0.5247524752475248,
+      "f1-score": 0.5047619047619047,
+      "support": 101.0
+    },
+    "4": {
+      "precision": 0.7619047619047619,
+      "recall": 0.7804878048780488,
+      "f1-score": 0.7710843373493976,
+      "support": 82.0
+    },
+    "accuracy": 0.517467248908297,
+    "macro avg": {
+      "precision": 0.5167263166904053,
+      "recall": 0.521405301775619,
+      "f1-score": 0.5182673258116525,
+      "support": 458.0
+    },
+    "weighted avg": {
+      "precision": 0.5147220321059459,
+      "recall": 0.517467248908297,
+      "f1-score": 0.5153037845512107,
+      "support": 458.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      38,
+      21,
+      14,
+      5,
+      0
+    ],
+    [
+      29,
+      54,
+      13,
+      9,
+      3
+    ],
+    [
+      14,
+      19,
+      28,
+      26,
+      2
+    ],
+    [
+      5,
+      7,
+      21,
+      53,
+      15
+    ],
+    [
+      0,
+      0,
+      2,
+      16,
+      64
+    ]
+  ],
+  "inference_time_s": 13.108082099992316,
+  "inference_imgs_per_s": 34.940275511416615
+}
