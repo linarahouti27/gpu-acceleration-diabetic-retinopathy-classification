@@ -637,7 +637,16 @@ Decision:             Loading is the first target: build the decoded-image cache
   - **Pinned memory is faster** because the driver does not need an extra copy into a fixed staging area first: about 1.9× for float32 on the laptop, about 2.6× on Colab.
   - **The laptop's copies are capped lower** (about 9.4 vs 12 GB/s pinned), probably because its PCIe connection to the GPU is narrower or older than the T4's (to confirm: `nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv` on P1's laptop). The pinned-memory gain is also smaller on the laptop because its faster CPU does the extra staging copy of normal memory faster.
 - **Decision:** the conclusion holds on both machines: copy the batches as uint8 from pinned memory and convert to float on the GPU (P3's design, with P2's `pin_memory`): 6.8× faster than float32 from normal memory on the laptop (batch 32: 3.80 → 0.56 ms). The pinned uint8 batch is small (19 MB at batch 128), so pinning is cheap (PyTorch's `pin_memory` already reuses pinned blocks). Keep it in perspective: the copy was 14% of the GPU's busy time in the baseline profile (A7.2–A7.3), and the GPU is idle 95% of the time, so this matters only once the loading bottleneck is fixed (Amdahl). Second part of A4.14 (copy share of `preprocess_batch_gpu`, with P3's pipeline on Colab T4): at batch size 32, GPU preprocessing (`circular_crop_gpu` + `clahe_gpu` + `normalize_gpu`) takes ~5.25 ms per batch (~0.164 ms/image), while copying the pinned uint8 batch takes 0.427 ms, so the H2D copy accounts for only **~7.5%** of the total GPU preprocessing time (5.68 ms total), compared to **~43.8%** if copying unpinned float32 tensors (4.09 ms copy vs 5.25 ms compute).
-
+### A5.6 Per-stage CPU vs GPU timings on the RTX 3050 (P1: fatima zahrae )   date: 2026-11-25
+Config / commit:      configs/baseline.yaml, commit $commit
+Command:              python benchmarks/_stages_local.py --n 64  (a local copy of benchmark_stages.py where only the filter_median_numba row is wrapped in try/except ImportError; numba is not installed on this machine)
+Result:               mean ms for 64 images, CPU / CUDA / speedup:
+                      preprocessing 135.2 / 24.2 / 5.6x;  filter_gaussian 17.5 / 3.0 / 5.9x;  filter_contrast 111.5 / 29.9 / 3.7x;  augmentation 19.7 / 8.9 / 2.2x
+                      filter_median (PyTorch) 40.5 / 319.0 / 0.13x (GPU 7.9x slower, same direction as the sweep: 4.3x slower at batch 128)
+                      train_step 1438.3 / 141.7 / 10.1x;  with AMP 71.5 / 20.1x;  inference 397.5 / 50.0 / 8.0x;  with AMP 27.4 / 14.5x
+Not usable as speedups: loading cuda 0.17 ms (12309x) only times the cache lookup and does not read the pixels; filter_green cuda 0.009 ms (692x) is a view of the tensor, not a computation. For the loading speedup I use bench_cache.py (no cache 3480 ms, warm 3.4 ms, about 1000x, with the pixels actually read).
+Observation:          this benchmark gives 451 img/s for one GPU train step (895 with AMP), while the real training epochs ran at 55 img/s. The benchmark keeps the batch on the GPU and does not include the data loader, so the gap points to something around the step; the cause is not tested (A7.7).
+Limitation:           filter_median_numba is not measured here (numba-cuda is not compatible with NumPy 2.5.4 on this machine); that column comes only from P4's Colab run. One step per row, 64 images.
 ### A4.16 Checkpoint questions (P3: Inès & P4: Lina)          date: 2026-11-11
 
 1. Why can a GPU kernel be slower than OpenCV on a single 224x224 image?
@@ -1044,6 +1053,7 @@ Result:               see the entry "A7.8 Result" below
 Prediction vs result: see the entry "A7.8 Result" below
 Explanation:          see the entry "A7.8 Result" below
 Decision:             see the entry "A7.8 Result" below
+
 ### A2.6 Rank the bottlenecks and compute the Amdahl bound
 
 - **Config / commit:** baseline profile, `results/profile_stages.json` (produced by A2.4, `benchmarks/profile_baseline.py`), machine: Colab T4 (trial run), commit 6c43b90
