@@ -1078,3 +1078,76 @@ Decision:             see the entry "A7.8 Result" below
 - **Prediction vs result:** not applicable, since no prediction was recorded beforehand. The profile shows loading (decode+resize) as the largest stage at 63.5%, backward second at 17.6%. CLAHE is only 1.8%, so the filters are not the bottleneck.
 - **Explanation:** data loading (JPEG decode + resize) dominates at 63.5%: in the baseline it runs on the CPU for every image at every epoch, while the GPU-side work (forward + backward) is only 32.1%. Optimising loading alone cannot exceed 2.74x; the bound for backward alone is only 1.21x. Preprocessing is only 3.4%, so moving it to the GPU gives at most 1.03x by itself. These bounds are ceilings: real gains are lower because no stage becomes free (a cache still reads from disk, for example).
 - **Decision:** attack loading first (A3 decoded-image cache, A5 DataLoader options and prefetching). Once loading is reduced, forward + backward become the next bottleneck, with a ceiling of 1.47x on the baseline. GPU preprocessing is kept for its transfer and CPU-offload benefits, not for its own share.
+
+### A2.8 CPU utilization and memory of the baseline run (P4: Lina, from P1's log) — 2026-11-24
+
+- **Config / commit:** `results/baseline/resources.csv`, written by P1's CPU baseline run (`python src/train_cpu.py`, which runs with `--monitor`) on the RTX 3050 laptop (i5-13420H, 8 cores / 12 threads, 8 GB RAM); 267 samples over 564 s.
+- **Question:** is the CPU saturated during the baseline, and how much memory does it use?
+- **Prediction:** n/a: reading an existing log, no new run.
+- **Command:** read `results/baseline/resources.csv` (mean, min, max of each column).
+- **Result:**
+
+  | Column | Mean | Min | Max |
+  |---|---|---|---|
+  | CPU utilization (whole machine) | 79.7% | 17.6% | 100% (23 of 267 samples ≥ 95%) |
+  | RAM used (whole machine) | 7.40 GB | 6.78 GB | 8.00 GB (of 8 GB) |
+  | Training processes (main + workers) | 1.50 GB | 0.98 GB | 2.13 GB |
+  | GPU utilization | 0% | 0% | 0% (CPU run) |
+
+- **Prediction vs result:** n/a.
+- **Explanation:**
+  - **The CPU is close to saturation but not pinned:** about 80% on average, with peaks at 100%. In the CPU baseline it does everything at once: the main process trains (forward, backward, with several PyTorch threads) while 2 workers decode and preprocess the next batches. The low points are probably the start, the validation phases and the end of the run.
+  - **The machine's RAM is almost full** (7.4 of 8 GB on average, 8.0 at the peak), although the training processes use only about 1.5 GB: the rest is the operating system and other programs.
+- **Decision:** the CPU is the resource to relieve (with A2.4: loading = 63.5% of the epoch): move decoding out of every epoch (cache, A3) and preprocessing to the GPU (A4). Watch the RAM when adding workers or pinned memory (A5.8): close other programs during the official runs.
+
+### A2.9 Profiling report (P4: Lina, with P1's measurements) — 2026-11-24
+
+- **Config / commit:** `configs/baseline.yaml`; measurements by P1 on the RTX 3050 laptop: `results/profile_stages.json` + `results/profile_baseline.txt` (A2.4, cProfile, one CPU epoch, `num_workers=0`), `results/timing.csv` (A2.5, 64 images, CPU), `results/baseline/history.json` and `resources.csv` (A1.7, A2.8); GPU profile draft on Colab T4: `results/colab_t4/torch_profiler_baseline/summary.json` (A7.2–A7.3).
+- **Question:** where does the baseline spend its time, and which optimizations should come first?
+- **Prediction:** see the A2.3 entries (P1, P3) and A2.10.
+- **Command:** `python benchmarks/profile_baseline.py`, `python benchmarks/benchmark_stages.py --n 64` (P1); chart: `python scripts/plot_profile_stages.py` → `results/figures/a2_9_baseline_stages.png`.
+- **Result:**
+  - **Time per stage, one profiled CPU epoch (167.7 s):**
+
+  | Stage | Time (s) | Share |
+  |---|---|---|
+  | Loading (decode + resize) | 106.5 | 63.5% |
+  | Backward | 29.6 | 17.6% |
+  | Forward | 24.3 | 14.5% |
+  | Preprocessing (CLAHE 3.0 s, crop 1.1 s, normalize 1.4 s) | 5.6 | 3.4% |
+  | Other | 1.5 | 0.9% |
+  | Optimizer step | 0.3 | 0.2% |
+
+  ![Baseline time per stage](../results/figures/a2_9_baseline_stages.png)
+
+  - **Per image, CPU (`timing.csv`, 64 images):** loading 38.9 ms, preprocessing 3.4 ms, augmentation 0.4 ms, training step 25.5 ms, inference 6.5 ms.
+  - **Real baseline run (2 workers):** 112.3 s per steady epoch (cold epoch 112.5 s, setup 2.5 s), about 22.7 training images per second. The profiled epoch is longer (167.7 s) because `num_workers=0` removes the overlap between loading and training, and cProfile adds overhead (see A2.10).
+  - **Resources (A2.8):** CPU about 80% busy on average, RAM 7.4 / 8 GB.
+  - **GPU view (draft, Colab T4, same baseline on the GPU):** the GPU is idle 95% of each training step (78 ms of GPU work per 1,677 ms step), waiting for loading.
+- **Prediction vs result:** see A2.10, Q1: loading was underestimated by everyone.
+- **Explanation:**
+  - **Loading dominates** because every epoch decodes the full-resolution original photos again before shrinking them to 224 × 224; the reference CNN itself is small (about 1 GFLOP per image, A6.6).
+  - **Training (forward + backward) is second** at 32%; it is the part the GPU accelerates directly.
+  - **Preprocessing is small** (3.4%): CLAHE, the most expensive part, is only 1.8% of the epoch.
+- **Decision: ranked priorities** (Amdahl bound if the stage became instant, `1 / (1 − p)`):
+
+  | Rank | Stage | p | Best total speed-up | Planned optimization |
+  |---|---|---|---|---|
+  | 1 | Loading | 0.635 | 2.74× | decoded-image cache (A3), more workers (A5.8) |
+  | 2 | Forward + backward | 0.321 | 1.47× | GPU training, AMP, `channels_last` (A6.1, A6.2) |
+  | 3 | Preprocessing | 0.034 | 1.04× | GPU preprocessing (A4), mainly because it allows copying uint8 (A4.14) |
+  | 4 | Optimizer step | 0.002 | 1.00× | nothing |
+
+  Loading and training together are 95.6% of the epoch: removing both would leave at most 4.4%, a bound of about 23×, which is why the cache and the GPU together are the core of the design (`docs/design_proposal.md`). **First confirmation (A3.5, P1):** with the cache, loading 64 images takes 3.4 ms (warm) or 12.0 ms (cold OS cache) instead of 3,480 ms; building the cache takes 27 s, once (`results/A35_*.csv`).
+
+### A2.10 Checkpoint questions (P4: Lina, rehearsed for the team meeting) — 2026-11-24
+
+- **Q1. Our predictions vs the measurement: where were we wrong and why?**
+  - **Predictions (A2.3):** P1 ranked backward, then forward, then loading; P3 expected preprocessing to be the largest share. My own ranking, written after seeing the profile (so not a real prediction): training first, then loading.
+  - **Measured (A2.4):** loading 63.5%, backward 17.6%, forward 14.5%, preprocessing 3.4%, optimizer 0.2%. We all underestimated loading, and P3 overestimated preprocessing.
+  - **Why:** the intuition "deep learning = training is the expensive part" does not hold here: the reference CNN is small (about 1 GFLOP per image), while decoding works on the full-resolution photos, for every image, every epoch, before they are resized to 224 × 224. CLAHE runs on the small 224 × 224 image, so it is cheap. Lesson: measure before optimizing.
+- **Q2. Why is `num_workers=0` right for cProfile but wrong for a benchmark of the real pipeline?**
+  - **Right for cProfile:** with workers, decoding and preprocessing run in separate processes that cProfile cannot see: it would only show the main process waiting for batches. With `num_workers=0` everything runs in the profiled process.
+  - **Wrong for a benchmark:** in the real pipeline the workers prepare the next batches while the main process trains, so loading and training overlap. With `num_workers=0` they run one after the other, so the epoch looks longer than it really is; cProfile also adds its own overhead. Evidence: the profiled epoch took 167.7 s, the real baseline epoch 112.3 s.
+- **Q3. A stage takes 18% of the baseline time. What is the largest possible end-to-end speedup from accelerating only that stage?**
+  - Amdahl: `1 / (1 − 0.18) = 1 / 0.82 ≈ 1.22×`, reached only if that stage became instant. Even a 100× faster version of an 18% stage cannot make the whole pipeline more than 22% faster.
