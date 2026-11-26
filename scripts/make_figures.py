@@ -10,6 +10,8 @@ FIG = os.path.join(R, "figures")
 os.makedirs(FIG, exist_ok=True)
 BASE = os.environ.get("BASELINE_RUN", "baseline")
 OPT = os.environ.get("OPT_RUN", "optimized")
+FINAL = os.environ.get("FINAL_RUN", OPT)
+FINAL = os.environ.get("FINAL_RUN", OPT)
 missing, produced = [], []
 
 
@@ -55,7 +57,7 @@ def ablation_names():
 
 
 def run_names():
-    others = sorted(os.path.basename(p) for p in glob.glob(f"{R}/exp_*") if os.path.isdir(p))
+    others = sorted(os.path.basename(p) for p in glob.glob(f"{R}/exp_*") + glob.glob(f"{R}/final_*") if os.path.isdir(p))
     return [BASE, OPT] + [n for n in others if n not in (BASE, OPT)]
 
 
@@ -93,14 +95,15 @@ def fig2_stage_speedup():
         return
     t = pd.read_csv(p)
     names, vals, cols = [], [], []
-    if "speedup_vs_cpu" in t:
-        g = t[(t["device"] != "cpu") & t["speedup_vs_cpu"].notna()]
+    sp = next((c for c in t.columns if c.startswith("speedup")), None)
+    if sp:
+        g = t[(t["device"] != "cpu") & t[sp].notna()]
         for _, r in g.iterrows():
             names.append(r["stage"])
-            vals.append(float(r["speedup_vs_cpu"]))
+            vals.append(float(r[sp]))
             cols.append("#1f5fa6")
     else:
-        missing.append(f"{p}: no speedup_vs_cpu column (A5.6-5.7)")
+        missing.append(f"{p}: no speedup column (A5.6-5.7)")
     e2e = end_to_end_speedup()
     if e2e:
         names.append("END-TO-END (steady epoch)")
@@ -112,7 +115,8 @@ def fig2_stage_speedup():
     ax.barh(names[::-1], vals[::-1], color=cols[::-1])
     for y, v in enumerate(vals[::-1]):
         ax.text(v, y, f" {v:.1f}x", va="center", fontsize=8)
-    ax.set_xlabel("Speedup vs CPU baseline (x)")
+    ax.set_xlabel("Speedup vs CPU (x, log scale)")
+    ax.set_xscale("log")
     ax.set_title("Stage speedups vs end-to-end speedup")
     save(fig, "fig2_stage_speedup")
 
@@ -223,7 +227,7 @@ def tables():
     parts = ["# Tables (auto-generated from results/)"]
     p = f"{R}/timing.csv"
     if os.path.exists(p):
-        cols = ["stage", "device", "mean_s", "std_s", "imgs_per_s", "speedup_vs_cpu"]
+        cols = ["stage", "device", "mean_s", "std_s", "imgs_per_s", "speedup", "speedup_vs_cpu"]
         t = pd.read_csv(p)
         parts.append("## Table 2 - Per-stage timings, CPU vs GPU\n\n" + md(t[[c for c in cols if c in t]]))
     else:
@@ -246,16 +250,25 @@ def tables():
                      "speedup vs baseline": (epoch_s(hb) / epoch_s(h)) if epoch_s(hb) else None,
                      "gpu mem (MB)": round(mem, 1) if mem else None,
                      "val macro-F1": best_val_f1(h)})
+    fin = [r for r in rows if r["run"].startswith("final_r")]
+    if len(fin) > 1:
+        v = np.array([r["steady epoch (s)"] for r in fin])
+        rows.append({"run": f"final (mean of {len(fin)} repeats)", "device": fin[0]["device"],
+                     "precision": fin[0]["precision"], "preprocessing": fin[0]["preprocessing"],
+                     "steady epoch (s)": f"{v.mean():.3f} +/- {v.std(ddof=1):.3f}",
+                     "speedup vs baseline": float(epoch_s(hb) / v.mean()) if epoch_s(hb) else None,
+                     "gpu mem (MB)": None,
+                     "val macro-F1": float(np.mean([r["val macro-F1"] for r in fin]))})
     if rows:
         parts.append("## Table 3 - End-to-end per configuration\n\n" + md(pd.DataFrame(rows)))
     q, cms = [], {}
-    for n in (BASE, OPT):
+    for n in (BASE, FINAL):
         m = jload(f"{R}/{n}/metrics.json")
         if not m:
             continue
         row = {"run": n}
         for k, v in m.items():
-            if isinstance(v, (int, float)):
+            if k in ("n_test", "accuracy", "macro_precision", "macro_recall", "macro_f1", "inference_imgs_per_s"):
                 row[k] = float(v)
             elif "confusion" in k.lower():
                 cms[n] = v
