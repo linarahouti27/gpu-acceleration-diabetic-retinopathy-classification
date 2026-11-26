@@ -97,10 +97,12 @@ def main():
         gpu = torch.device("cuda")
 
         # loading: from the uint8 cache of A3 (our images are PNGs, so no GPU JPEG decode).
-        # Reading the cache is CPU work, so the timer uses the CPU device.
+        # Reading the cache is CPU work, so the timer uses the CPU device. np.array forces a real
+        # read: load() alone returns a view of the memory-mapped file and reads nothing.
         cache = build_cache(train, cfg["data"]["image_size"], "data/cache")   # built once, not timed
         ds_cached = DRDataset(train, cfg["data"]["image_size"], cache=cache)
-        add("loading", "cuda", lambda: [ds_cached.load(i) for i in range(N)], cpu, repeats=3, warmup=1)
+        add("loading", "cuda", lambda: [np.array(ds_cached.load(i)) for i in range(N)], cpu,
+            repeats=3, warmup=1)
 
         # h2d_transfer: a pinned uint8 batch copied to the device
         u8_pinned = torch.from_numpy(u8).pin_memory()     # N,H,W,3 uint8, pinned, still on the CPU
@@ -114,8 +116,13 @@ def main():
         t_gpu = preprocess_gpu.to_float_bchw(u8_pinned, gpu)      # float N,C,H,W on the GPU
         add("filter_gaussian", "cuda", lambda: filters_gpu.gaussian_blur_gpu(t_gpu), gpu)
         add("filter_median", "cuda", lambda: filters_gpu.median_filter_gpu(t_gpu), gpu)
-        add("filter_median_numba", "cuda", lambda: filters_gpu.median_filter_numba(t_gpu), gpu)
-        add("filter_green", "cuda", lambda: filters_gpu.green_channel_gpu(t_gpu), gpu)
+        try:   # needs a working numba-cuda install; skip the row instead of crashing
+            add("filter_median_numba", "cuda", lambda: filters_gpu.median_filter_numba(t_gpu), gpu)
+        except Exception as e:
+            print(f"filter_median_numba  skipped: {type(e).__name__}: {e}", flush=True)
+        # .contiguous() makes a real copy, like np.ascontiguousarray in the CPU row
+        # (the slice alone is a view and does no work)
+        add("filter_green", "cuda", lambda: filters_gpu.green_channel_gpu(t_gpu).contiguous(), gpu)
         add("filter_contrast", "cuda", lambda: filters_gpu.contrast_stretch_gpu(t_gpu), gpu)
         add("augmentation", "cuda", lambda: preprocess_gpu.augment_gpu(t_gpu), gpu)
 
