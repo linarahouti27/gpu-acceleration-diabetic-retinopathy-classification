@@ -1161,3 +1161,8 @@ Decision:             see the entry "A7.8 Result" below
   - **Wrong for a benchmark:** in the real pipeline the workers prepare the next batches while the main process trains, so loading and training overlap. With `num_workers=0` they run one after the other, so the epoch looks longer than it really is; cProfile also adds its own overhead. Evidence: the profiled epoch took 167.7 s, the real baseline epoch 112.3 s.
 - **Q3. A stage takes 18% of the baseline time. What is the largest possible end-to-end speedup from accelerating only that stage?**
   - Amdahl: `1 / (1 − 0.18) = 1 / 0.82 ≈ 1.22×`, reached only if that stage became instant. Even a 100× faster version of an 18% stage cannot make the whole pipeline more than 22% faster.
+
+### A7.1 Tests on the GPU (P1: Fatima zahrae)   date: 2026-11-27
+Commit:               271474c
+Command:              python -m pytest tests -v   (device: RTX 3050 6GB Laptop GPU)
+Result:               ======================== 24 passed, 1 skipped in 5.26s ========================
