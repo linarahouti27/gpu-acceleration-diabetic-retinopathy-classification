@@ -50,11 +50,29 @@ def main():
     os.makedirs("results", exist_ok=True)
     df.to_csv("results/end_to_end_runs.csv", index=False)
 
-    # TODO(A7.1): aggregate per configuration: mean and standard deviation of wall_s and
-    #   steady_epoch_s, mean of cold_epoch_s. Add two speedup columns relative to
-    #   baseline_cpu: speedup_wall and speedup_steady_epoch. Write results/end_to_end.csv.
-    #   Question for the report: which of the two speedups would you quote, and why do they differ?
+    # A7.1: aggregate per configuration (mean and std over the timed repeats; the warm-up
+    # run is not in df) and add the speedups relative to the CPU baseline.
+    agg = df.groupby("config", sort=False).agg(
+        repeats=("repeat", "count"),
+        wall_s_mean=("wall_s", "mean"), wall_s_std=("wall_s", "std"),
+        steady_epoch_s_mean=("steady_epoch_s", "mean"),
+        steady_epoch_s_std=("steady_epoch_s", "std"),
+        cold_epoch_s_mean=("cold_epoch_s", "mean"),
+    ).reset_index()
+    if "baseline_cpu" in set(agg["config"]):
+        base = agg.set_index("config").loc["baseline_cpu"]
+        agg["speedup_wall"] = base["wall_s_mean"] / agg["wall_s_mean"]
+        agg["speedup_steady_epoch"] = base["steady_epoch_s_mean"] / agg["steady_epoch_s_mean"]
+    else:
+        agg["speedup_wall"] = np.nan
+        agg["speedup_steady_epoch"] = np.nan
+    agg.to_csv("results/end_to_end.csv", index=False)
+    # For the report: speedup_wall includes the one-time costs (setup, worker spawn, the cold
+    # first epoch, validation), speedup_steady_epoch only the repeated cost per epoch.
+
     print(df.to_string(index=False))
+    print()
+    print(agg.to_string(index=False))
 
 
 if __name__ == "__main__":
