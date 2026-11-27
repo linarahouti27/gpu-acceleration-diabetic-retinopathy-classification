@@ -1,0 +1,72 @@
+{
+  "run": "e2e_optimized_gpu_rwarmup",
+  "config": "configs/optimized.yaml",
+  "cfg": {
+    "seed": 42,
+    "data": {
+      "split_seed": 42,
+      "root": "data/dr_dataset",
+      "image_size": [
+        224,
+        224
+      ],
+      "num_classes": 5,
+      "train_frac": 0.7,
+      "val_frac": 0.15,
+      "batch_size": 32,
+      "num_workers": 2,
+      "cache_dir": "data/cache",
+      "prefetch_factor": 2,
+      "prefetch_gpu": true
+    },
+    "preprocess": {
+      "gpu": true,
+      "clahe": true,
+      "circular_crop": true,
+      "normalize": true,
+      "gamma": 1.0,
+      "augment": false
+    },
+    "train": {
+      "model": "reference_cnn",
+      "epochs": 1,
+      "lr": 0.001,
+      "amp": true,
+      "channels_last": true,
+      "compile": false,
+      "weight_decay": 0.0,
+      "label_smoothing": 0.0
+    }
+  },
+  "device": "cuda",
+  "gpu_preprocess": true,
+  "augment": false,
+  "amp": true,
+  "channels_last": true,
+  "compile": false,
+  "splits": {
+    "train": 2116,
+    "val": 425,
+    "test": 458
+  },
+  "setup_time_s": 0.3194682000030298,
+  "wall_time_s": 24.35542730000452,
+  "cold_epoch_s": 24.0061410000053,
+  "steady_epoch_s": 24.0061410000053,
+  "best_val_f1": 0.12665028870105743,
+  "history": [
+    {
+      "epoch": 0,
+      "train_loss": 1.5983217412775212,
+      "train_acc": 0.2206439393939394,
+      "val_loss": 1.5530353860294117,
+      "val_acc": 0.2211764705882353,
+      "val_f1": 0.12665028870105743,
+      "train_time_s": 14.78765640000347,
+      "val_time_s": 9.21848460000183,
+      "train_imgs_per_s": 142.8218199605655,
+      "val_imgs_per_s": 46.10302218218335,
+      "gpu_peak_mem_mb": 475.97021484375
+    }
+  ]
+}

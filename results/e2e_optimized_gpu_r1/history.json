@@ -1,0 +1,85 @@
+{
+  "run": "e2e_optimized_gpu_r1",
+  "config": "configs/optimized.yaml",
+  "cfg": {
+    "seed": 42,
+    "data": {
+      "split_seed": 42,
+      "root": "data/dr_dataset",
+      "image_size": [
+        224,
+        224
+      ],
+      "num_classes": 5,
+      "train_frac": 0.7,
+      "val_frac": 0.15,
+      "batch_size": 32,
+      "num_workers": 2,
+      "cache_dir": "data/cache",
+      "prefetch_factor": 2,
+      "prefetch_gpu": true
+    },
+    "preprocess": {
+      "gpu": true,
+      "clahe": true,
+      "circular_crop": true,
+      "normalize": true,
+      "gamma": 1.0,
+      "augment": false
+    },
+    "train": {
+      "model": "reference_cnn",
+      "epochs": 2,
+      "lr": 0.001,
+      "amp": true,
+      "channels_last": true,
+      "compile": false,
+      "weight_decay": 0.0,
+      "label_smoothing": 0.0
+    }
+  },
+  "device": "cuda",
+  "gpu_preprocess": true,
+  "augment": false,
+  "amp": true,
+  "channels_last": true,
+  "compile": false,
+  "splits": {
+    "train": 2116,
+    "val": 425,
+    "test": 458
+  },
+  "setup_time_s": 0.035904399992432445,
+  "wall_time_s": 23.57115989999147,
+  "cold_epoch_s": 20.042863399983617,
+  "steady_epoch_s": 3.4713489999994636,
+  "best_val_f1": 0.27200841903686523,
+  "history": [
+    {
+      "epoch": 0,
+      "train_loss": 1.5983217412775212,
+      "train_acc": 0.2206439393939394,
+      "val_loss": 1.5530353860294117,
+      "val_acc": 0.2211764705882353,
+      "val_f1": 0.12665028870105743,
+      "train_time_s": 11.577712899990729,
+      "val_time_s": 8.465150499992887,
+      "train_imgs_per_s": 182.41944831795675,
+      "val_imgs_per_s": 50.20584099483607,
+      "gpu_peak_mem_mb": 476.53271484375
+    },
+    {
+      "epoch": 1,
+      "train_loss": 1.5476021044182056,
+      "train_acc": 0.2708333333333333,
+      "val_loss": 1.5601889935661766,
+      "val_acc": 0.3270588235294118,
+      "val_f1": 0.27200841903686523,
+      "train_time_s": 3.10585340000398,
+      "val_time_s": 0.36549559999548364,
+      "train_imgs_per_s": 680.0063389976145,
+      "val_imgs_per_s": 1162.8046958848524,
+      "gpu_peak_mem_mb": 476.533203125
+    }
+  ]
+}
