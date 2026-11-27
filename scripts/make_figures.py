@@ -186,7 +186,7 @@ def fig5_resources():
             missing.append(p)
             continue
         df = pd.read_csv(p)
-        tc = _pick(df.columns, r"time|elapsed|^t$|ts")
+        tc = _pick(df.columns, r"time|elapsed|^t$|^t_s$|ts")   # resources.csv names it t_s
         x = df[tc] - df[tc].iloc[0] if tc else np.arange(len(df))
         cpu = _pick(df.columns, "cpu")
         gpu = _pick(df.columns, "gpu", "util") or _pick(df.columns, "gpu")
