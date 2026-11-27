@@ -338,9 +338,9 @@ had kept an epoch 0.02 F1 below the best.
 - **Repetitions and variability.** The CPU baseline and the final configuration were each run 3
   times (seeds 42, 43, 44), reported as mean ± sample standard deviation. Ablation and exploration
   runs are single runs, and we compare them against the seed-to-seed spread above. The protocol
-  script `benchmarks/benchmark_end_to_end.py` (1 discarded warm-up run + 3 timed repeats per
-  configuration, `results/end_to_end.csv`) is the formal version of this measurement. *(Result to
-  be added after P1's run.)*
+  script `benchmarks/benchmark_end_to_end.py` is the formal version of this measurement: for the
+  CPU baseline and the optimized pipeline, 1 discarded warm-up run, then 3 timed repeats of 2
+  epochs each, same seed (`results/end_to_end_runs.csv`, `results/end_to_end.csv`, section 7.2).
 - **GPU idle fraction** (profiler): 1 − (union of the GPU kernel and copy intervals) / (profiled
   wall time). Overlapping kernels are counted once, and the profiler's own step markers are
   excluded.
@@ -348,8 +348,9 @@ had kept an epoch 0.02 F1 below the best.
 - **Correctness checks:**
   - `tests/test_cpu_gpu_equivalence.py`: preprocessing and filters within tolerances.
   - `tests/test_data_pipeline.py`: cache identical to direct decoding; patient-level split.
-  - On Colab, every test passed (6 CPU tests, 3 GPU tests). *(Laptop result to be added after P1's
-    run.)*
+  - On the laptop GPU: **24 passed, 1 skipped** (`results/pytest_output.txt`). The skipped test is
+    the Numba median kernel, because numba-cuda cannot run there (section 5.4). On Colab, the Numba
+    test passed as well.
 
 ## 7. Results and comparisons
 
@@ -431,6 +432,22 @@ epoch (cuDNN autotuning, first reads of the cache file, and a first validation p
 than the next ones) and worker start-up. In the final configuration the cold epoch alone (28.7 s)
 is more than half of the 54-second run. Longer training would bring the wall-time speedup closer to
 the steady one.
+
+**Table 3b: Benchmark protocol** (`benchmarks/benchmark_end_to_end.py`, `results/end_to_end.csv`).
+Each configuration ran 1 discarded warm-up run, then 3 timed repeats of 2 epochs each, seed 42. With
+2 epochs, the steady epoch is epoch 1.
+
+| Configuration | Repeats | Steady epoch (s) | Cold epoch (s) | 2-epoch run (s) | Speedup steady / run |
+|---|---|---|---|---|---|
+| CPU baseline | 3 | 96.3 ± 1.0 | 112.9 | 209.3 ± 0.5 | 1× / 1× |
+| Optimized pipeline | 3 | 3.47 ± 0.01 | 20.5 | 24.0 ± 0.8 | **27.7× / 8.7×** |
+
+The protocol confirms the training runs: a **28–30× steady-epoch speedup** for the same model, with
+a very small spread on the GPU (±0.3%). It also shows the effect of one-time costs even more
+clearly. Over only 2 epochs, the cold epoch is 85% of the optimized run, so the wall-time speedup
+drops to 8.7×. The baseline's steady epoch is shorter here (96.3 s) than in the 5-epoch runs
+(105.9 s, which average 3 seeds and epochs 1–4), so we compare each speedup only within its own
+protocol.
 
 **Memory:**
 
@@ -685,7 +702,8 @@ The largest single contribution, the cache, is algorithmic and would help on any
 
 - **Few repetitions.**
   - The baseline and the final configuration have 3 runs each.
-  - The optimized pipeline, the ablation and the exploration experiments have one run each.
+  - The optimized pipeline has one 5-epoch run, plus 3 repeats in the benchmark protocol
+    (Table 3b). The ablation and exploration experiments have one run each.
   - The seed-to-seed spread of the best validation F1 is up to 0.03 for the reference CNN, so
     smaller differences (CLAHE, resolution, schedule, augmentation) are not conclusive. Only the
     model change is clearly above it.
